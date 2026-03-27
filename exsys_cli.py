@@ -30,6 +30,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from exsys_hub import ExsysUsbHub, HubConfig, HubError
@@ -93,7 +94,6 @@ def cmd_save(hub: ExsysUsbHub) -> None:
 # ---------------------------------------------------------------------------
 
 def cmd_config_init(config_path: str) -> None:
-    import os
     if os.path.exists(config_path):
         print(f"[config] Already exists: {config_path}")
         print("  Delete it first if you want to reset to defaults.")
@@ -163,7 +163,6 @@ def cmd_config_set_port_name(config_path: str, port: int, name: str) -> None:
 
 def _load_config_optional(config_path: str) -> HubConfig | None:
     """Load config if it exists, return None otherwise."""
-    import os
     if os.path.exists(config_path):
         return HubConfig.load(config_path)
     return None

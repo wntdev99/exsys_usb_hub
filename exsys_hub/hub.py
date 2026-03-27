@@ -1,25 +1,4 @@
-"""ExsysUsbHub — importable class for controlling Exsys Managed USB Hubs.
-
-Quick start
------------
->>> from exsys_hub import ExsysUsbHub
->>> with ExsysUsbHub("/dev/ttyUSB0") as hub:
-...     print(hub.info())
-...     hub.on(1)
-...     hub.off(2)
-...     print(hub.status())
-
-With config file
-----------------
->>> from exsys_hub import ExsysUsbHub, HubConfig
->>> cfg = HubConfig.load("exsys_hub.yaml")
->>> with ExsysUsbHub.from_config(cfg) as hub:
-...     hub.on(1)
-"""
-
 from __future__ import annotations
-
-from typing import Optional
 
 import serial
 from serial import SerialException
@@ -90,10 +69,10 @@ class ExsysUsbHub:
         self._port = port
         self._baudrate = baudrate
         self._timeout = timeout
-        self._ser: Optional[serial.Serial] = None
-        self._n_ports: Optional[int] = None
-        self._model: Optional[str] = None
-        self._fw: Optional[str] = None
+        self._ser: serial.Serial | None = None
+        self._n_ports: int | None = None
+        self._model: str | None = None
+        self._fw: str | None = None
 
     # ------------------------------------------------------------------
     # Constructors
@@ -337,7 +316,7 @@ class ExsysUsbHub:
 # Protocol helpers (pure functions, no I/O)
 # ---------------------------------------------------------------------------
 
-def _parse_hub_ports(message: str, n_ports: int) -> Optional[list[bool]]:
+def _parse_hub_ports(message: str, n_ports: int) -> list[bool] | None:
     """Decode 8-char hex response into port-state list."""
     if len(message) != 8:
         return None
@@ -348,7 +327,7 @@ def _parse_hub_ports(message: str, n_ports: int) -> Optional[list[bool]]:
     return [bool(int(c)) for c in message[:n_ports]]
 
 
-def _message_from_hub_ports(ports: list[bool], n_ports: int) -> Optional[bytes]:
+def _message_from_hub_ports(ports: list[bool], n_ports: int) -> bytes | None:
     """Encode port-state list into SPpass... command bytes."""
     if len(ports) != n_ports:
         return None
