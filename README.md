@@ -103,9 +103,12 @@ ports:
 
 Manage via CLI:
 ```bash
-python exsys_cli.py config set port /dev/ttyUSB1
-python exsys_cli.py config set port-name 1 "Z-Wave Dongle"
-python exsys_cli.py config show
+python exsys_cli.py config init                          # 기본 설정 파일 생성
+python exsys_cli.py config show                          # 현재 설정 출력
+python exsys_cli.py config set port /dev/ttyUSB1        # 시리얼 포트 변경
+python exsys_cli.py config set baudrate 9600             # 보드레이트 변경
+python exsys_cli.py config set timeout 2                 # 타임아웃 변경
+python exsys_cli.py config set port-name 1 "Z-Wave Dongle"  # 포트 이름 설정
 ```
 
 ---
@@ -113,6 +116,7 @@ python exsys_cli.py config show
 ## CLI
 
 ```bash
+# 장치 제어
 python exsys_cli.py info
 python exsys_cli.py status
 python exsys_cli.py on  <port>
@@ -120,11 +124,22 @@ python exsys_cli.py off <port>
 python exsys_cli.py reset
 python exsys_cli.py factory-reset
 python exsys_cli.py save
+
+# 설정 관리
+python exsys_cli.py config init
+python exsys_cli.py config show
+python exsys_cli.py config set port /dev/ttyUSB0
+python exsys_cli.py config set port-name 1 "Z-Wave Dongle"
 ```
 
-Override serial port without config:
+Config 없이 시리얼 포트 직접 지정:
 ```bash
 python exsys_cli.py -p /dev/ttyUSB0 status
+```
+
+다른 config 파일 지정:
+```bash
+python exsys_cli.py -c /etc/exsys_hub.yaml status
 ```
 
 ---
@@ -143,4 +158,6 @@ except HubTimeoutError:
     print("Device not responding")
 except HubResponseError:
     print("Unexpected response from device")
+except ValueError:
+    print("Invalid port number")  # 포트 범위 초과 시 발생
 ```
