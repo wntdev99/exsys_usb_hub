@@ -1,0 +1,20 @@
+# Exsys USB Hub configuration
+#
+# device:
+#   port     - serial port path (e.g. /dev/ttyUSB0)
+#   baudrate - baud rate (default: 9600)
+#   timeout  - read timeout in seconds (default: 2)
+#
+# ports:
+#   Assign a label to each port for display purposes.
+#   Leave empty ("") to use the default "Port N" label.
+#
+device:
+  baudrate: 9600
+  port: /dev/exsys_hub
+  timeout: 2
+ports:
+  1: ''
+  2: ''
+  3: ''
+  4: ''
