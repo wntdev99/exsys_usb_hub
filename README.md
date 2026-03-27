@@ -30,8 +30,10 @@ sudo bash setup.sh
 ### 수동 설치
 
 ```bash
-pip install pyserial pyyaml
+pip install -e .
 ```
+
+> `exsys_hub` 모듈을 시스템 어디서든 import 가능합니다.
 
 ---
 

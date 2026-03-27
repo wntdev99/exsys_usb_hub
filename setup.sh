@@ -44,12 +44,12 @@ ok "Linux 확인"
 # Step 2: Python dependencies
 # ---------------------------------------------------------------------------
 
-info "Python 패키지 설치 중 (pyserial, pyyaml)..."
+info "Python 패키지 설치 중..."
 
 if command -v pip3 &>/dev/null; then
-    pip3 install --quiet pyserial pyyaml --break-system-packages 2>/dev/null \
-        || pip3 install --quiet pyserial pyyaml
-    ok "pyserial, pyyaml 설치 완료"
+    pip3 install --quiet -e "$SCRIPT_DIR" --break-system-packages 2>/dev/null \
+        || pip3 install --quiet -e "$SCRIPT_DIR"
+    ok "exsys-hub (editable) 설치 완료 — 어디서든 import 가능"
 else
     error "pip3 를 찾을 수 없습니다. Python 3 환경을 확인하세요."
 fi
