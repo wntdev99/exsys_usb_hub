@@ -186,5 +186,6 @@ except ValueError:
 
 ## 참고
 
+- [개발 경위](docs/development-history.md) — uhubctl 시도부터 현재 패키지 완성까지의 전체 과정
 - [`uhubctl`로 VBUS 제어가 되지 않는 이유](docs/uhubctl-vbus-analysis.md)
 
