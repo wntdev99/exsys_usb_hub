@@ -1,0 +1,11 @@
+{
+  "domain": "exsys_usb_hub",
+  "name": "Exsys USB Hub",
+  "codeowners": ["@veista"],
+  "config_flow": true,
+  "documentation": "https://github.com/veista/exsys_usb_hub",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/veista/exsys_usb_hub/issues",
+  "requirements": ["pyserial", "pyserial-asyncio-fast"],
+  "version": "1.0.0"
+}

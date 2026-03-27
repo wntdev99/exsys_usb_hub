@@ -1,0 +1,9 @@
+{
+    "entity": {
+        "button": {
+          "reset_hub": {"default": "mdi:restart"},
+          "restore_factory_defaults": {"default": "mdi:reload-alert"},
+          "save_port_states": {"default": "mdi:content-save"}
+        }
+      }
+}

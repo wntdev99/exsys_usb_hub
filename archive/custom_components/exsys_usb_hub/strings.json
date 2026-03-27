@@ -1,0 +1,30 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "[%key:common::config_flow::abort::already_configured_device%]"
+    },
+    "step": {
+      "serial": {
+        "title": "[%key:common::config_flow::serial::title%]",
+        "data": {
+          "name": "[%key:common::config_flow::data::name%]",
+          "host_port": "[%key:common::config_flow::data::host_port%]"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]",
+      "invalid_response": "[%key:common::config_flow::error::invalid_response%]"
+    }
+  },
+  "entity": {
+    "button": {
+      "reset_hub": {"name": "Reset"},
+      "restore_factory_defaults": {"name": "Restore Factory Defaults"},
+      "save_port_states": {"name": "Save Port States as Defaults"}
+    },
+    "switch": {
+      "port": {"name": "Port {port_number}"}
+    }
+  }
+}
