@@ -8,13 +8,29 @@ Tested with **EX-1504HMS** (4–16 port hubs with USB-Serial management interfac
 
 ## Install
 
+### 자동 설치 (권장)
+
 ```bash
-pip install pyserial pyyaml
+git clone https://github.com/wntdev99/exsys_usb_hub.git
+cd exsys_usb_hub
+sudo bash setup.sh
 ```
 
-Serial port permission (one-time):
+`setup.sh`가 자동으로 처리하는 항목:
+
+| 항목 | 내용 |
+|------|------|
+| Python 패키지 | `pyserial`, `pyyaml` 설치 |
+| 장치 감지 | 연결된 USB-Serial 장치 VID/PID/Serial 자동 탐색 |
+| udev 규칙 | `/etc/udev/rules.d/99-exsys-hub.rules` 생성 |
+| 심링크 | `/dev/exsys_hub` 고정 경로 생성 (포트 변경 무관) |
+| 권한 | `MODE=0666` — sudo 없이 즉시 사용 가능 |
+| config | `exsys_hub.yaml` 기본 생성 |
+
+### 수동 설치
+
 ```bash
-sudo usermod -aG dialout $USER   # re-login required
+pip install pyserial pyyaml
 ```
 
 ---
@@ -161,3 +177,10 @@ except HubResponseError:
 except ValueError:
     print("Invalid port number")  # 포트 범위 초과 시 발생
 ```
+
+---
+
+## 참고
+
+- [`uhubctl`로 VBUS 제어가 되지 않는 이유](docs/uhubctl-vbus-analysis.md)
+
