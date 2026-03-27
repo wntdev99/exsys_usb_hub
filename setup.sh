@@ -38,7 +38,33 @@ require_sudo() {
 
 info "플랫폼 확인 중..."
 [[ "$(uname -s)" == "Linux" ]] || error "이 스크립트는 Linux 전용입니다."
-ok "Linux 확인"
+
+# Ubuntu 버전 확인 (22.04 이상 필요 — Python 3.10+ 기본 탑재)
+if command -v lsb_release &>/dev/null; then
+    distro=$(lsb_release -is)
+    version=$(lsb_release -rs)
+    if [[ "$distro" == "Ubuntu" ]]; then
+        major=$(echo "$version" | cut -d. -f1)
+        minor=$(echo "$version" | cut -d. -f2)
+        if [[ "$major" -lt 22 ]] || [[ "$major" -eq 22 && "$minor" -lt 4 ]]; then
+            error "Ubuntu 22.04 이상이 필요합니다. (현재: Ubuntu $version)"
+        fi
+        ok "Ubuntu $version 확인"
+    else
+        ok "Linux ($distro $version) 확인 — Python 3.10+ 여부만 검증합니다."
+    fi
+else
+    ok "Linux 확인"
+fi
+
+# Python 버전 확인 (3.10 이상 필요)
+py_version=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null)
+py_major=$(echo "$py_version" | cut -d. -f1)
+py_minor=$(echo "$py_version" | cut -d. -f2)
+if [[ "$py_major" -lt 3 ]] || [[ "$py_major" -eq 3 && "$py_minor" -lt 10 ]]; then
+    error "Python 3.10 이상이 필요합니다. (현재: Python $py_version)"
+fi
+ok "Python $py_version 확인"
 
 # ---------------------------------------------------------------------------
 # Step 2: Python dependencies

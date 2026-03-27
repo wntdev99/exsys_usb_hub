@@ -4,7 +4,7 @@ Python module for controlling Exsys Managed USB Hubs over serial — no Home Ass
 
 Tested with **EX-1504HMS** (4–16 port hubs with USB-Serial management interface).
 
-**Requirements:** Python 3.10+, Linux
+**Requirements:** Python 3.10+, Ubuntu 22.04 LTS 이상 (또는 Python 3.10+가 설치된 Linux)
 
 ---
 
