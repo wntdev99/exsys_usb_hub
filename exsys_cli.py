@@ -1,214 +1,186 @@
-"""Exsys Managed USB Hub — standalone CLI for Ubuntu (no Home Assistant required).
-
-Usage:
-    python exsys_cli.py -p /dev/ttyUSB0 info
-    python exsys_cli.py -p /dev/ttyUSB0 status
-    python exsys_cli.py -p /dev/ttyUSB0 on  <port>   # 1-indexed
-    python exsys_cli.py -p /dev/ttyUSB0 off <port>   # 1-indexed
-    python exsys_cli.py -p /dev/ttyUSB0 reset
-    python exsys_cli.py -p /dev/ttyUSB0 factory-reset
-    python exsys_cli.py -p /dev/ttyUSB0 save
+"""Exsys USB Hub CLI — powered by the exsys_hub module.
 
 Requirements:
-    pip install pyserial
+    pip install pyserial pyyaml
+
+Usage:
+    # Config 초기화 (최초 1회)
+    python exsys_cli.py config init
+
+    # Config 기반 사용 (포트 지정 불필요)
+    python exsys_cli.py info
+    python exsys_cli.py status
+    python exsys_cli.py on 1
+    python exsys_cli.py off 2
+
+    # 시리얼 포트 직접 지정 (config 없어도 동작)
+    python exsys_cli.py -p /dev/ttyUSB0 status
+
+    # config 파일 경로 지정
+    python exsys_cli.py -c /etc/exsys_hub.yaml status
+
+    # Config 관리
+    python exsys_cli.py config show
+    python exsys_cli.py config set port /dev/ttyUSB0
+    python exsys_cli.py config set baudrate 9600
+    python exsys_cli.py config set timeout 2
+    python exsys_cli.py config set port-name 1 "Z-Wave Dongle"
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
-from typing import Optional
 
-import serial
-from serial import SerialException
+from exsys_hub import ExsysUsbHub, HubConfig, HubError
 
-# ---------------------------------------------------------------------------
-# Serial constants
-# ---------------------------------------------------------------------------
-BAUDRATE = 9600
-BYTESIZE = 8
-PARITY = "N"
-STOPBITS = 1
-TIMEOUT = 2  # seconds
-
-
-# ---------------------------------------------------------------------------
-# Low-level serial I/O
-# ---------------------------------------------------------------------------
-
-def _open(port: str) -> serial.Serial:
-    try:
-        ser = serial.Serial(
-            port,
-            baudrate=BAUDRATE,
-            bytesize=BYTESIZE,
-            parity=PARITY,
-            stopbits=STOPBITS,
-            timeout=TIMEOUT,
-        )
-        return ser
-    except SerialException as exc:
-        print(f"[error] Cannot open serial port {port!r}: {exc}", file=sys.stderr)
-        sys.exit(1)
-
-
-def _write_read(ser: serial.Serial, cmd: bytes) -> str:
-    """Send cmd and return stripped UTF-8 response. Exits on failure."""
-    try:
-        ser.write(cmd)
-        raw = ser.readline()
-    except SerialException as exc:
-        print(f"[error] Serial communication failed: {exc}", file=sys.stderr)
-        sys.exit(1)
-
-    if not raw:
-        print("[error] No response from device (timeout).", file=sys.stderr)
-        sys.exit(1)
-
-    return raw.decode("utf-8").strip()
-
-
-# ---------------------------------------------------------------------------
-# Protocol helpers  (ported from device.py, no HA dependency)
-# ---------------------------------------------------------------------------
-
-def _parse_hub_ports(message: str, n_ports: int) -> Optional[list[bool]]:
-    """Decode 8-char hex response into a list of port states (port-order)."""
-    if len(message) != 8:
-        return None
-    message = "".join(sum(zip(message[1::2], message[::2], strict=True), ()))
-    message = message[::-1]
-    message = int(message, 16)
-    message = format(message, "b")[::-1]
-    return [bool(int(c)) for c in message[:n_ports]]
-
-
-def _message_from_hub_ports(ports: list[bool], n_ports: int) -> Optional[bytes]:
-    """Encode port-state list into the SPpass... command bytes."""
-    if len(ports) != n_ports:
-        return None
-    message = "".join([str(int(c)) for c in ports][::-1])
-    message = int(message, 2)
-    message = (message | 0xFFFFFFFF << n_ports) & 0xFFFFFFFF
-    message = str(hex(message))[2:].upper()
-    message = "".join(sum(zip(message[1::2], message[::2], strict=True), ()))
-    message = message[::-1]
-    return b"SPpass    " + message.encode() + b"\r"
+DEFAULT_CONFIG = "exsys_hub.yaml"
 
 
 # ---------------------------------------------------------------------------
 # Hub commands
 # ---------------------------------------------------------------------------
 
-def get_hub_info(ser: serial.Serial) -> tuple[str, int, str]:
-    """Return (model, n_ports, fw_version). Exits on failure."""
-    response = _write_read(ser, b"?Q\r")
-    if "v" not in response:
-        print(f"[error] Unexpected response to ?Q: {response!r}", file=sys.stderr)
-        sys.exit(1)
-    device_type = response.split("v")[0]
-    n_ports = int(device_type[-2:])
-    fw_version = "v" + response.split("v")[1]
-    return device_type, n_ports, fw_version
-
-
-def get_hub_state(ser: serial.Serial, n_ports: int) -> list[bool]:
-    """Return current port states. Exits on failure."""
-    response = _write_read(ser, b"GP\r")
-    states = _parse_hub_ports(response, n_ports)
-    if states is None:
-        print(f"[error] Unexpected response to GP: {response!r}", file=sys.stderr)
-        sys.exit(1)
-    return states
-
-
-def set_port_state(
-    ser: serial.Serial, port_idx: int, state: bool, n_ports: int
-) -> list[bool]:
-    """Set port_idx (0-based) to state. Returns updated port array. Exits on failure."""
-    current = get_hub_state(ser, n_ports)
-    current[port_idx] = state
-    cmd = _message_from_hub_ports(current, n_ports)
-    if cmd is None:
-        print("[error] Failed to build set-port command.", file=sys.stderr)
-        sys.exit(1)
-    response = _write_read(ser, cmd)
-    if not response or response[0] != "G":
-        print(f"[error] Hub rejected set-port command: {response!r}", file=sys.stderr)
-        sys.exit(1)
-    return current
-
-
-def reset_hub(ser: serial.Serial) -> None:
-    _write_read(ser, b"RHpass    \r")
-
-
-def restore_factory_defaults(ser: serial.Serial, n_ports: int) -> list[bool]:
-    response = _write_read(ser, b"RDpass    \r")
-    if not response or response[0] != "G":
-        print(f"[error] Hub rejected factory-reset: {response!r}", file=sys.stderr)
-        sys.exit(1)
-    return get_hub_state(ser, n_ports)
-
-
-def save_port_states(ser: serial.Serial) -> None:
-    response = _write_read(ser, b"WPpass    \r")
-    if not response or response[0] != "G":
-        print(f"[error] Hub rejected save command: {response!r}", file=sys.stderr)
-        sys.exit(1)
-
-
-# ---------------------------------------------------------------------------
-# CLI commands
-# ---------------------------------------------------------------------------
-
-def cmd_info(ser: serial.Serial) -> None:
-    model, n_ports, fw = get_hub_info(ser)
+def cmd_info(hub: ExsysUsbHub) -> None:
+    d = hub.info()
     print("[info]")
-    print(f"  Model    : {model}")
-    print(f"  Ports    : {n_ports}")
-    print(f"  Firmware : {fw}")
+    print(f"  Model    : {d['model']}")
+    print(f"  Ports    : {d['ports']}")
+    print(f"  Firmware : {d['firmware']}")
 
 
-def cmd_status(ser: serial.Serial) -> None:
-    _, n_ports, _ = get_hub_info(ser)
-    states = get_hub_state(ser, n_ports)
+def cmd_status(hub: ExsysUsbHub, cfg: HubConfig | None) -> None:
+    states = hub.status()
     print("[status]")
     for i, on in enumerate(states, start=1):
-        print(f"  Port {i}: {'ON ' if on else 'OFF'}")
+        label = cfg.port_label(i) if cfg else f"Port {i}"
+        state_str = "ON " if on else "OFF"
+        print(f"  {label}: {state_str}")
 
 
-def cmd_set_port(ser: serial.Serial, port_number: int, state: bool) -> None:
-    _, n_ports, _ = get_hub_info(ser)
-    if not (1 <= port_number <= n_ports):
-        print(f"[error] Port number must be between 1 and {n_ports}.", file=sys.stderr)
-        sys.exit(1)
-    port_idx = port_number - 1
-    current = get_hub_state(ser, n_ports)
-    prev = current[port_idx]
-    updated = set_port_state(ser, port_idx, state, n_ports)
-    label = "ON" if state else "OFF"
-    prev_label = "ON" if prev else "OFF"
-    status = "✓" if updated[port_idx] == state else "✗"
-    print(f"  Port {port_number}: {prev_label} -> {label}  {status}")
+def cmd_set_port(hub: ExsysUsbHub, port: int, state: bool, cfg: HubConfig | None) -> None:
+    prev = hub.get_port(port)
+    if state:
+        hub.on(port)
+    else:
+        hub.off(port)
+    label = cfg.port_label(port) if cfg else f"Port {port}"
+    prev_str = "ON" if prev else "OFF"
+    new_str = "ON" if state else "OFF"
+    print(f"  {label}: {prev_str} -> {new_str}  ✓")
 
 
-def cmd_reset(ser: serial.Serial) -> None:
-    reset_hub(ser)
+def cmd_reset(hub: ExsysUsbHub) -> None:
+    hub.reset()
     print("  Hub reset: OK")
 
 
-def cmd_factory_reset(ser: serial.Serial) -> None:
-    _, n_ports, _ = get_hub_info(ser)
-    states = restore_factory_defaults(ser, n_ports)
-    print("[factory-reset] OK — current port states after reset:")
+def cmd_factory_reset(hub: ExsysUsbHub, cfg: HubConfig | None) -> None:
+    states = hub.factory_reset()
+    print("[factory-reset] OK — port states after reset:")
     for i, on in enumerate(states, start=1):
-        print(f"  Port {i}: {'ON ' if on else 'OFF'}")
+        label = cfg.port_label(i) if cfg else f"Port {i}"
+        print(f"  {label}: {'ON ' if on else 'OFF'}")
 
 
-def cmd_save(ser: serial.Serial) -> None:
-    save_port_states(ser)
+def cmd_save(hub: ExsysUsbHub) -> None:
+    hub.save()
     print("  Port states saved as power-on defaults: OK")
+
+
+# ---------------------------------------------------------------------------
+# Config subcommands
+# ---------------------------------------------------------------------------
+
+def cmd_config_init(config_path: str) -> None:
+    import os
+    if os.path.exists(config_path):
+        print(f"[config] Already exists: {config_path}")
+        print("  Delete it first if you want to reset to defaults.")
+        return
+    cfg = HubConfig.default()
+    cfg.save(config_path)
+    print(f"[config] Created: {config_path}")
+    print("  Edit the file to set your serial port and port names.")
+
+
+def cmd_config_show(config_path: str) -> None:
+    try:
+        cfg = HubConfig.load(config_path)
+    except FileNotFoundError as e:
+        print(f"[error] {e}", file=sys.stderr)
+        sys.exit(1)
+
+    d = cfg.as_dict()
+    print(f"[config]  {config_path}")
+    print(f"  device.port     : {cfg.serial_port}")
+    print(f"  device.baudrate : {cfg.baudrate}")
+    print(f"  device.timeout  : {cfg.timeout}s")
+    ports = d.get("ports", {})
+    if ports:
+        print("  ports:")
+        for num, name in sorted(ports.items()):
+            display = name if name else "(unnamed)"
+            print(f"    {num}: {display}")
+
+
+def cmd_config_set(config_path: str, key: str, value: str) -> None:
+    try:
+        cfg = HubConfig.load(config_path)
+    except FileNotFoundError:
+        cfg = HubConfig.default()
+        print(f"[config] {config_path} not found — creating with defaults.")
+
+    if key == "port":
+        cfg.serial_port = value
+    elif key == "baudrate":
+        cfg.baudrate = int(value)
+    elif key == "timeout":
+        cfg.timeout = int(value)
+    else:
+        print(f"[error] Unknown key {key!r}. Valid: port, baudrate, timeout", file=sys.stderr)
+        sys.exit(1)
+
+    cfg.save(config_path)
+    print(f"[config] {key} = {value}  (saved to {config_path})")
+
+
+def cmd_config_set_port_name(config_path: str, port: int, name: str) -> None:
+    try:
+        cfg = HubConfig.load(config_path)
+    except FileNotFoundError:
+        cfg = HubConfig.default()
+        print(f"[config] {config_path} not found — creating with defaults.")
+
+    cfg.set_port_name(port, name)
+    cfg.save(config_path)
+    print(f"[config] Port {port} name = {name!r}  (saved to {config_path})")
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _load_config_optional(config_path: str) -> HubConfig | None:
+    """Load config if it exists, return None otherwise."""
+    import os
+    if os.path.exists(config_path):
+        return HubConfig.load(config_path)
+    return None
+
+
+def _resolve_serial_port(args, cfg: HubConfig | None) -> str:
+    """Return serial port: CLI flag > config file > error."""
+    if args.port:
+        return args.port
+    if cfg:
+        return cfg.serial_port
+    print(
+        "[error] No serial port specified.\n"
+        "  Use -p /dev/ttyUSB0  or  run `python exsys_cli.py config init` first.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -218,51 +190,103 @@ def cmd_save(ser: serial.Serial) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="exsys_cli.py",
-        description="Control Exsys Managed USB Hub over serial — no Home Assistant needed.",
+        description="Control Exsys Managed USB Hub — no Home Assistant needed.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "-p", "--port",
-        required=True,
         metavar="SERIAL_PORT",
-        help="Serial port path, e.g. /dev/ttyUSB0",
+        default=None,
+        help="Serial port path (overrides config). e.g. /dev/ttyUSB0",
+    )
+    parser.add_argument(
+        "-c", "--config",
+        metavar="CONFIG_FILE",
+        default=DEFAULT_CONFIG,
+        help=f"Config file path (default: {DEFAULT_CONFIG})",
     )
 
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
     sub.required = True
 
-    sub.add_parser("info", help="Show device model, port count, and firmware version")
-    sub.add_parser("status", help="Show all port states (ON/OFF)")
+    # Hub commands
+    sub.add_parser("info", help="Show device model, port count, firmware")
+    sub.add_parser("status", help="Show all port ON/OFF states")
 
     on_p = sub.add_parser("on", help="Turn a port ON")
-    on_p.add_argument("port_number", type=int, metavar="PORT", help="Port number (1-indexed)")
+    on_p.add_argument("port_number", type=int, metavar="PORT")
 
     off_p = sub.add_parser("off", help="Turn a port OFF")
-    off_p.add_argument("port_number", type=int, metavar="PORT", help="Port number (1-indexed)")
+    off_p.add_argument("port_number", type=int, metavar="PORT")
 
     sub.add_parser("reset", help="Reset the hub")
     sub.add_parser("factory-reset", help="Restore factory defaults")
     sub.add_parser("save", help="Save current port states as power-on defaults")
 
+    # Config subcommand group
+    cfg_p = sub.add_parser("config", help="Manage config file")
+    cfg_sub = cfg_p.add_subparsers(dest="config_action", metavar="ACTION")
+    cfg_sub.required = True
+
+    cfg_sub.add_parser("init", help="Create default config file")
+    cfg_sub.add_parser("show", help="Print current config")
+
+    set_p = cfg_sub.add_parser("set", help="Set a config value")
+    set_p.add_argument(
+        "key",
+        choices=["port", "baudrate", "timeout", "port-name"],
+        metavar="KEY",
+        help="port | baudrate | timeout | port-name",
+    )
+    set_p.add_argument("value", nargs="+", metavar="VALUE",
+                       help="Value (for port-name: PORT_NUMBER NAME)")
+
     args = parser.parse_args()
 
-    ser = _open(args.port)
+    # ---- Config-only commands (no hub connection needed) ----
+    if args.command == "config":
+        if args.config_action == "init":
+            cmd_config_init(args.config)
+        elif args.config_action == "show":
+            cmd_config_show(args.config)
+        elif args.config_action == "set":
+            if args.key == "port-name":
+                if len(args.value) < 2:
+                    print("[error] Usage: config set port-name <PORT_NUMBER> <NAME>",
+                          file=sys.stderr)
+                    sys.exit(1)
+                cmd_config_set_port_name(args.config, int(args.value[0]),
+                                         " ".join(args.value[1:]))
+            else:
+                cmd_config_set(args.config, args.key, args.value[0])
+        return
+
+    # ---- Hub commands (need serial connection) ----
+    cfg = _load_config_optional(args.config)
+    serial_port = _resolve_serial_port(args, cfg)
+
+    baudrate = cfg.baudrate if cfg else 9600
+    timeout = cfg.timeout if cfg else 2
+
     try:
-        if args.command == "info":
-            cmd_info(ser)
-        elif args.command == "status":
-            cmd_status(ser)
-        elif args.command == "on":
-            cmd_set_port(ser, args.port_number, True)
-        elif args.command == "off":
-            cmd_set_port(ser, args.port_number, False)
-        elif args.command == "reset":
-            cmd_reset(ser)
-        elif args.command == "factory-reset":
-            cmd_factory_reset(ser)
-        elif args.command == "save":
-            cmd_save(ser)
-    finally:
-        ser.close()
+        with ExsysUsbHub(serial_port, baudrate=baudrate, timeout=timeout) as hub:
+            if args.command == "info":
+                cmd_info(hub)
+            elif args.command == "status":
+                cmd_status(hub, cfg)
+            elif args.command == "on":
+                cmd_set_port(hub, args.port_number, True, cfg)
+            elif args.command == "off":
+                cmd_set_port(hub, args.port_number, False, cfg)
+            elif args.command == "reset":
+                cmd_reset(hub)
+            elif args.command == "factory-reset":
+                cmd_factory_reset(hub, cfg)
+            elif args.command == "save":
+                cmd_save(hub)
+    except HubError as exc:
+        print(f"[error] {exc}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
