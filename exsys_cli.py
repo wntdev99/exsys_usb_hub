@@ -283,7 +283,7 @@ def main() -> None:
                 cmd_factory_reset(hub, cfg)
             elif args.command == "save":
                 cmd_save(hub)
-    except HubError as exc:
+    except (HubError, ValueError) as exc:
         print(f"[error] {exc}", file=sys.stderr)
         sys.exit(1)
 
