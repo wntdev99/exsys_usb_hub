@@ -17,6 +17,9 @@ SYMLINK_PATH="/dev/${SYMLINK_NAME}"
 CONFIG_FILE="exsys_hub.yaml"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# sudo로 실행 시 실제 사용자 추적 (pip 설치 경로 등에 활용)
+REAL_USER="${SUDO_USER:-$USER}"
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -27,8 +30,10 @@ warn()  { echo -e "${YELLOW}[ warn]${NC} $*"; }
 error() { echo -e "${RED}[error]${NC} $*"; exit 1; }
 
 require_sudo() {
-    if ! sudo -v 2>/dev/null; then
-        error "sudo 권한이 필요합니다."
+    if [[ $EUID -ne 0 ]]; then
+        if ! sudo -v 2>/dev/null; then
+            error "sudo 권한이 필요합니다."
+        fi
     fi
 }
 
@@ -38,6 +43,16 @@ require_sudo() {
 
 info "플랫폼 확인 중..."
 [[ "$(uname -s)" == "Linux" ]] || error "이 스크립트는 Linux 전용입니다."
+
+# WSL 환경 감지
+if grep -qiE "microsoft|wsl" /proc/version 2>/dev/null; then
+    error "WSL 환경은 지원하지 않습니다.\nudev가 WSL에서 동작하지 않으므로 네이티브 Linux 또는 VM을 사용하세요."
+fi
+
+# Docker/컨테이너 환경 감지
+if [[ -f /.dockerenv ]] || grep -q "docker\|lxc" /proc/1/cgroup 2>/dev/null; then
+    warn "컨테이너 환경이 감지되었습니다. udev 규칙이 정상 동작하지 않을 수 있습니다."
+fi
 
 # Ubuntu 버전 확인 (22.04 이상 필요 — Python 3.10+ 기본 탑재)
 if command -v lsb_release &>/dev/null; then
@@ -58,7 +73,10 @@ else
 fi
 
 # Python 버전 확인 (3.10 이상 필요)
-py_version=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null)
+if ! command -v python3 &>/dev/null; then
+    error "python3 를 찾을 수 없습니다."
+fi
+py_version=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
 py_major=$(echo "$py_version" | cut -d. -f1)
 py_minor=$(echo "$py_version" | cut -d. -f2)
 if [[ "$py_major" -lt 3 ]] || [[ "$py_major" -eq 3 && "$py_minor" -lt 10 ]]; then
@@ -66,19 +84,36 @@ if [[ "$py_major" -lt 3 ]] || [[ "$py_major" -eq 3 && "$py_minor" -lt 10 ]]; the
 fi
 ok "Python $py_version 확인"
 
+# udevadm 설치 여부 확인
+if ! command -v udevadm &>/dev/null; then
+    warn "udevadm 을 찾을 수 없습니다. udev 규칙 및 심링크 설정을 건너뜁니다."
+    warn "설치: sudo apt install udev"
+    SKIP_UDEV=1
+fi
+
 # ---------------------------------------------------------------------------
 # Step 2: Python dependencies
 # ---------------------------------------------------------------------------
 
 info "Python 패키지 설치 중..."
 
+# pip 명령어 결정 (pip3 우선, 없으면 pip)
 if command -v pip3 &>/dev/null; then
-    pip3 install --quiet -e "$SCRIPT_DIR" --break-system-packages 2>/dev/null \
-        || pip3 install --quiet -e "$SCRIPT_DIR"
-    ok "exsys-hub (editable) 설치 완료 — 어디서든 import 가능"
+    PIP=pip3
+elif command -v pip &>/dev/null; then
+    PIP=pip
 else
-    error "pip3 를 찾을 수 없습니다. Python 3 환경을 확인하세요."
+    error "pip 를 찾을 수 없습니다. Python 3 환경을 확인하세요."
 fi
+
+# venv 환경 여부에 따라 --break-system-packages 옵션 결정
+if [[ -n "$VIRTUAL_ENV" ]]; then
+    $PIP install --quiet -e "$SCRIPT_DIR"
+else
+    $PIP install --quiet -e "$SCRIPT_DIR" --break-system-packages 2>/dev/null \
+        || $PIP install --quiet -e "$SCRIPT_DIR"
+fi
+ok "exsys-hub (editable) 설치 완료 — 어디서든 import 가능"
 
 # ---------------------------------------------------------------------------
 # Step 3: Detect connected device
@@ -91,6 +126,9 @@ DETECTED_VID=""
 DETECTED_PID=""
 DETECTED_SERIAL=""
 DETECTED_PRODUCT=""
+DEVICE_COUNT=0
+
+declare -a FOUND_PORTS=()
 
 for port in /dev/ttyUSB* /dev/ttyACM*; do
     [[ -e "$port" ]] || continue
@@ -99,42 +137,81 @@ for port in /dev/ttyUSB* /dev/ttyACM*; do
         | grep 'ATTRS{idVendor}' | head -1 | sed 's/.*=="\(.*\)"/\1/')
     pid=$(udevadm info -a -n "$port" 2>/dev/null \
         | grep 'ATTRS{idProduct}' | head -1 | sed 's/.*=="\(.*\)"/\1/')
+
+    if [[ -n "$vid" && -n "$pid" ]]; then
+        FOUND_PORTS+=("$port")
+        DEVICE_COUNT=$((DEVICE_COUNT + 1))
+    fi
+done
+
+if [[ $DEVICE_COUNT -eq 0 ]]; then
+    warn "연결된 USB-Serial 장치를 찾을 수 없습니다."
+    warn "장치 연결 후 setup.sh 를 다시 실행하세요."
+elif [[ $DEVICE_COUNT -gt 1 ]]; then
+    # 여러 장치 발견 — 목록 출력 후 선택 요청
+    warn "USB-Serial 장치가 ${DEVICE_COUNT}개 감지되었습니다. Exsys 허브에 해당하는 포트를 선택하세요."
+    for i in "${!FOUND_PORTS[@]}"; do
+        port="${FOUND_PORTS[$i]}"
+        product=$(udevadm info -a -n "$port" 2>/dev/null \
+            | grep 'ATTRS{product}' | head -1 | sed 's/.*=="\(.*\)"/\1/')
+        echo "  [$((i+1))] $port  ${product:-(product unknown)}"
+    done
+    echo -n "  선택 [1-${DEVICE_COUNT}]: "
+    read -r choice
+    if [[ "$choice" -ge 1 && "$choice" -le "$DEVICE_COUNT" ]] 2>/dev/null; then
+        TARGET_PORT="${FOUND_PORTS[$((choice-1))]}"
+    else
+        error "잘못된 선택입니다."
+    fi
+
+    vid=$(udevadm info -a -n "$TARGET_PORT" 2>/dev/null \
+        | grep 'ATTRS{idVendor}' | head -1 | sed 's/.*=="\(.*\)"/\1/')
+    pid=$(udevadm info -a -n "$TARGET_PORT" 2>/dev/null \
+        | grep 'ATTRS{idProduct}' | head -1 | sed 's/.*=="\(.*\)"/\1/')
+    serial=$(udevadm info -a -n "$TARGET_PORT" 2>/dev/null \
+        | grep 'ATTRS{serial}' | head -1 | sed 's/.*=="\(.*\)"/\1/')
+    product=$(udevadm info -a -n "$TARGET_PORT" 2>/dev/null \
+        | grep 'ATTRS{product}' | head -1 | sed 's/.*=="\(.*\)"/\1/')
+    [[ "$serial" =~ ^0+$ || ${#serial} -le 1 ]] && serial=""
+
+    DETECTED_PORT="$TARGET_PORT"
+    DETECTED_VID="$vid"
+    DETECTED_PID="$pid"
+    DETECTED_SERIAL="$serial"
+    DETECTED_PRODUCT="$product"
+    ok "선택된 장치: $DETECTED_PORT"
+else
+    port="${FOUND_PORTS[0]}"
+    vid=$(udevadm info -a -n "$port" 2>/dev/null \
+        | grep 'ATTRS{idVendor}' | head -1 | sed 's/.*=="\(.*\)"/\1/')
+    pid=$(udevadm info -a -n "$port" 2>/dev/null \
+        | grep 'ATTRS{idProduct}' | head -1 | sed 's/.*=="\(.*\)"/\1/')
     serial=$(udevadm info -a -n "$port" 2>/dev/null \
         | grep 'ATTRS{serial}' | head -1 | sed 's/.*=="\(.*\)"/\1/')
     product=$(udevadm info -a -n "$port" 2>/dev/null \
         | grep 'ATTRS{product}' | head -1 | sed 's/.*=="\(.*\)"/\1/')
+    [[ "$serial" =~ ^0+$ || ${#serial} -le 1 ]] && serial=""
 
-    # 시리얼이 전부 0이거나 너무 짧으면 무의미 — 제거
-    if [[ "$serial" =~ ^0+$ || ${#serial} -le 1 ]]; then
-        serial=""
-    fi
-
-    if [[ -n "$vid" && -n "$pid" ]]; then
-        DETECTED_PORT="$port"
-        DETECTED_VID="$vid"
-        DETECTED_PID="$pid"
-        DETECTED_SERIAL="$serial"
-        DETECTED_PRODUCT="$product"
-        break
-    fi
-done
+    DETECTED_PORT="$port"
+    DETECTED_VID="$vid"
+    DETECTED_PID="$pid"
+    DETECTED_SERIAL="$serial"
+    DETECTED_PRODUCT="$product"
+    ok "장치 감지됨: $DETECTED_PORT"
+fi
 
 if [[ -n "$DETECTED_PORT" ]]; then
-    ok "장치 감지됨: $DETECTED_PORT"
     echo "    Product : ${DETECTED_PRODUCT:-unknown}"
     echo "    VID     : $DETECTED_VID"
     echo "    PID     : $DETECTED_PID"
     [[ -n "$DETECTED_SERIAL" ]] && echo "    Serial  : $DETECTED_SERIAL"
-else
-    warn "연결된 USB-Serial 장치를 찾을 수 없습니다."
-    warn "udev 규칙 없이 계속합니다. 장치 연결 후 setup.sh 를 다시 실행하세요."
 fi
 
 # ---------------------------------------------------------------------------
 # Step 4: udev rule (MODE=0666 — 그룹 설정 없이 누구나 접근 가능)
 # ---------------------------------------------------------------------------
 
-if [[ -n "$DETECTED_VID" && -n "$DETECTED_PID" ]]; then
+if [[ -n "$DETECTED_VID" && -n "$DETECTED_PID" && -z "$SKIP_UDEV" ]]; then
     info "udev 규칙 생성 중: $UDEV_RULE_FILE"
 
     if [[ -n "$DETECTED_SERIAL" ]]; then
@@ -204,12 +281,13 @@ echo -e "${BOLD}=============================${NC}"
 echo -e "${GREEN}${BOLD}  Setup 완료${NC}"
 echo -e "${BOLD}=============================${NC}"
 echo ""
-echo -e "  의존성     : pyserial, pyyaml"
-[[ -n "$DETECTED_VID" ]] && \
-echo -e "  udev 규칙  : $UDEV_RULE_FILE"
+echo -e "  실행 사용자 : $REAL_USER"
+echo -e "  의존성      : pyserial, pyyaml"
+[[ -n "$DETECTED_VID" && -z "$SKIP_UDEV" ]] && \
+echo -e "  udev 규칙   : $UDEV_RULE_FILE"
 [[ -L "$SYMLINK_PATH" ]] && \
-echo -e "  심링크     : $SYMLINK_PATH"
-echo -e "  설정 파일  : $SCRIPT_DIR/$CONFIG_FILE"
+echo -e "  심링크      : $SYMLINK_PATH"
+echo -e "  설정 파일   : $SCRIPT_DIR/$CONFIG_FILE"
 echo ""
 echo -e "  ${CYAN}사용법:${NC}"
 echo -e "    python3 exsys_cli.py status"
