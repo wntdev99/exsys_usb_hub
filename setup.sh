@@ -21,11 +21,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Helpers
 # ---------------------------------------------------------------------------
 
-info()    { echo -e "${CYAN}[setup]${NC} $*"; }
-ok()      { echo -e "${GREEN}[  ok ]${NC} $*"; }
-warn()    { echo -e "${YELLOW}[ warn]${NC} $*"; }
-error()   { echo -e "${RED}[error]${NC} $*"; exit 1; }
-ask()     { echo -e "${BOLD}$*${NC}"; }
+info()  { echo -e "${CYAN}[setup]${NC} $*"; }
+ok()    { echo -e "${GREEN}[  ok ]${NC} $*"; }
+warn()  { echo -e "${YELLOW}[ warn]${NC} $*"; }
+error() { echo -e "${RED}[error]${NC} $*"; exit 1; }
 
 require_sudo() {
     if ! sudo -v 2>/dev/null; then
@@ -56,21 +55,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 3: dialout group
-# ---------------------------------------------------------------------------
-
-info "dialout 그룹 확인 중..."
-
-if id -nG "$USER" | grep -qw "dialout"; then
-    ok "이미 dialout 그룹에 속해 있음"
-else
-    require_sudo
-    sudo usermod -aG dialout "$USER"
-    ok "dialout 그룹 추가 완료 (재로그인 후 적용 — udev 규칙으로 즉시 사용 가능)"
-fi
-
-# ---------------------------------------------------------------------------
-# Step 4: Detect connected device
+# Step 3: Detect connected device
 # ---------------------------------------------------------------------------
 
 info "연결된 USB-Serial 장치 감지 중..."
@@ -120,18 +105,17 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 5: udev rule
+# Step 4: udev rule (MODE=0666 — 그룹 설정 없이 누구나 접근 가능)
 # ---------------------------------------------------------------------------
 
 if [[ -n "$DETECTED_VID" && -n "$DETECTED_PID" ]]; then
     info "udev 규칙 생성 중: $UDEV_RULE_FILE"
 
-    # 시리얼 번호가 있으면 특정 장치만 매칭, 없으면 VID/PID만으로 매칭
     if [[ -n "$DETECTED_SERIAL" ]]; then
-        RULE='SUBSYSTEM=="tty", ATTRS{idVendor}=="'"$DETECTED_VID"'", ATTRS{idProduct}=="'"$DETECTED_PID"'", ATTRS{serial}=="'"$DETECTED_SERIAL"'", SYMLINK+="'"$SYMLINK_NAME"'", GROUP="dialout", MODE="0664"'
+        RULE='SUBSYSTEM=="tty", ATTRS{idVendor}=="'"$DETECTED_VID"'", ATTRS{idProduct}=="'"$DETECTED_PID"'", ATTRS{serial}=="'"$DETECTED_SERIAL"'", SYMLINK+="'"$SYMLINK_NAME"'", MODE="0666"'
         MATCH_DESC="VID:PID:Serial (장치 고유)"
     else
-        RULE='SUBSYSTEM=="tty", ATTRS{idVendor}=="'"$DETECTED_VID"'", ATTRS{idProduct}=="'"$DETECTED_PID"'", SYMLINK+="'"$SYMLINK_NAME"'", GROUP="dialout", MODE="0664"'
+        RULE='SUBSYSTEM=="tty", ATTRS{idVendor}=="'"$DETECTED_VID"'", ATTRS{idProduct}=="'"$DETECTED_PID"'", SYMLINK+="'"$SYMLINK_NAME"'", MODE="0666"'
         MATCH_DESC="VID:PID"
     fi
 
@@ -141,14 +125,12 @@ if [[ -n "$DETECTED_VID" && -n "$DETECTED_PID" ]]; then
 
     require_sudo
     echo "$RULE" | sudo tee "$UDEV_RULE_FILE" > /dev/null
-    ok "udev 규칙 작성 완료 (매칭: $MATCH_DESC)"
+    ok "udev 규칙 작성 완료 (매칭: $MATCH_DESC, MODE=0666)"
 
-    # udev 리로드 및 재적용
     sudo udevadm control --reload-rules
     sudo udevadm trigger
     ok "udev 규칙 적용 완료"
 
-    # 심링크 확인
     sleep 1
     if [[ -L "$SYMLINK_PATH" ]]; then
         ok "심링크 확인: $SYMLINK_PATH -> $(readlink -f "$SYMLINK_PATH")"
@@ -159,7 +141,7 @@ if [[ -n "$DETECTED_VID" && -n "$DETECTED_PID" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Step 6: Default config
+# Step 5: Default config
 # ---------------------------------------------------------------------------
 
 info "설정 파일 확인 중: $SCRIPT_DIR/$CONFIG_FILE"
@@ -167,7 +149,6 @@ info "설정 파일 확인 중: $SCRIPT_DIR/$CONFIG_FILE"
 if [[ -f "$SCRIPT_DIR/$CONFIG_FILE" ]]; then
     ok "설정 파일 이미 존재함 — 건너뜀"
 else
-    # 심링크가 있으면 /dev/exsys_hub, 없으면 감지된 포트, 둘 다 없으면 기본값
     if [[ -L "$SYMLINK_PATH" || -n "$DETECTED_VID" ]]; then
         DEFAULT_PORT="$SYMLINK_PATH"
     elif [[ -n "$DETECTED_PORT" ]]; then
@@ -198,7 +179,6 @@ echo -e "${GREEN}${BOLD}  Setup 완료${NC}"
 echo -e "${BOLD}=============================${NC}"
 echo ""
 echo -e "  의존성     : pyserial, pyyaml"
-echo -e "  dialout    : $USER"
 [[ -n "$DETECTED_VID" ]] && \
 echo -e "  udev 규칙  : $UDEV_RULE_FILE"
 [[ -L "$SYMLINK_PATH" ]] && \
@@ -209,8 +189,3 @@ echo -e "  ${CYAN}사용법:${NC}"
 echo -e "    python3 exsys_cli.py status"
 echo -e "    python3 exsys_cli.py on 1"
 echo ""
-if ! id -nG "$USER" | grep -qw "dialout"; then
-    echo -e "  ${YELLOW}※ 재로그인 후 sudo 없이 사용 가능합니다.${NC}"
-    echo -e "  ${YELLOW}  (현재 세션: newgrp dialout)${NC}"
-    echo ""
-fi
