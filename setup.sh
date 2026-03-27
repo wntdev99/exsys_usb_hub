@@ -106,14 +106,16 @@ else
     error "pip 를 찾을 수 없습니다. Python 3 환경을 확인하세요."
 fi
 
-# venv 환경 여부에 따라 --break-system-packages 옵션 결정
-if [[ -n "$VIRTUAL_ENV" ]]; then
-    $PIP install --quiet -e "$SCRIPT_DIR"
-else
-    $PIP install --quiet -e "$SCRIPT_DIR" --break-system-packages 2>/dev/null \
-        || $PIP install --quiet -e "$SCRIPT_DIR"
-fi
+# pyserial, pyyaml 은 시스템(apt/ROS2)에 이미 설치된 버전을 그대로 사용.
+# --no-deps: 의존성 재설치 생략 → 시스템 패키지 충돌 없음
+# --break-system-packages: exsys_hub 모듈 등록만을 위한 최소 사용
+$PIP install --quiet -e "$SCRIPT_DIR" --no-deps --break-system-packages 2>/dev/null \
+    || $PIP install --quiet -e "$SCRIPT_DIR" --no-deps
 ok "exsys-hub (editable) 설치 완료 — 어디서든 import 가능"
+
+# pyserial, pyyaml 이 실제로 import 가능한지 확인
+python3 -c "import serial, yaml" 2>/dev/null \
+    || warn "pyserial 또는 pyyaml 이 없습니다. 수동으로 설치하세요: sudo apt install python3-serial python3-yaml"
 
 # ---------------------------------------------------------------------------
 # Step 3: Detect connected device
