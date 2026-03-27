@@ -122,7 +122,7 @@ Manage via CLI:
 python exsys_cli.py config init                          # 기본 설정 파일 생성
 python exsys_cli.py config show                          # 현재 설정 출력
 python exsys_cli.py config set port /dev/ttyUSB1        # 시리얼 포트 변경
-python exsys_cli.py config set baudrate 9600             # 보드레이트 변경
+python exsys_cli.py config set baudrate 9600             # 보드레이트 변경 (기본값 9600 — 장치 고정값이므로 수정 금지)
 python exsys_cli.py config set timeout 2                 # 타임아웃 변경
 python exsys_cli.py config set port-name 1 "Z-Wave Dongle"  # 포트 이름 설정
 ```
