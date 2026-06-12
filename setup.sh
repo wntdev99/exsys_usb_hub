@@ -46,7 +46,7 @@ _clean_serial() {
 # 포트에 ?Q 를 보내 모델/포트수/펌웨어 확인 (읽기 전용). 코어는 ROS 무관.
 # 빌드 전에도 동작하도록 src 를 PYTHONPATH 에 넣는다. 실패 시 빈 문자열.
 _probe_model() {  # $1 = port
-    PYTHONPATH="$SCRIPT_DIR/src" python3 - "$1" 2>/dev/null <<'PY' || true
+    PYTHONPATH="$SCRIPT_DIR/exsys_usb_hub/src" python3 - "$1" 2>/dev/null <<'PY' || true
 import sys
 try:
     from exsys_usb_hub.core import SerialTransport
@@ -103,7 +103,7 @@ do_list() {
     [[ $any -eq 0 ]] && echo "    (없음 — 아직 setup.sh 미실행)" || true
 
     echo; echo -e "  ${CYAN}MODEL 이 '(미확인)'${NC} 이면 Exsys 허브가 아니거나 포트를 다른 프로세스가 점유 중입니다."
-    echo -e "  다중 허브는 위 SYMLINK 값을 config/exsys_hub_multi.yaml 의 device_path 에 채우세요."
+    echo -e "  다중 허브는 위 SYMLINK 값을 exsys_usb_hub/config/exsys_hub_multi.yaml 의 device_path 에 채우세요."
 }
 
 # ---------------------------------------------------------------------------
@@ -260,8 +260,9 @@ if [[ -z "$SKIP_BUILD" ]]; then
     elif [[ ! -d "$WS_ROOT/src" ]]; then
         warn "colcon 워크스페이스 루트를 찾지 못했습니다 ($WS_ROOT). 수동으로 빌드하세요."
     else
-        info "colcon 빌드 중: $WS_ROOT (패키지: $PKG_NAME)"
-        ( cd "$WS_ROOT" && colcon build --packages-select "$PKG_NAME" )
+        info "colcon 빌드 중: $WS_ROOT (패키지: ${PKG_NAME}_msgs, $PKG_NAME)"
+        # 인터페이스 패키지를 먼저(의존성), colcon 이 순서를 자동 정렬한다.
+        ( cd "$WS_ROOT" && colcon build --packages-select "${PKG_NAME}_msgs" "$PKG_NAME" )
         ok "빌드 완료 — 사용 전: source $WS_ROOT/install/setup.bash"
     fi
 fi
@@ -287,7 +288,7 @@ echo -e "    source $WS_ROOT/install/setup.bash"
 echo -e "    ros2 launch $PKG_NAME exsys_hub.launch.py"
 echo ""
 if [[ ${#SELECTED_PORTS[@]} -gt 1 ]]; then
-echo -e "  ${CYAN}다중 허브:${NC} config/exsys_hub_multi.yaml 의 device_path 를 위 심링크로 채운 뒤"
+echo -e "  ${CYAN}다중 허브:${NC} exsys_usb_hub/config/exsys_hub_multi.yaml 의 device_path 를 위 심링크로 채운 뒤"
 echo -e "    ros2 launch $PKG_NAME exsys_hub_multi.launch.py"
 echo ""
 fi

@@ -1,0 +1,6 @@
+# 포트 이름으로 전원 제어 (이름은 전역 고유)
+string port     # 포트 이름 (예: "handeye_view_camera")
+bool state      # true=ON, false=OFF
+---
+bool success
+string message

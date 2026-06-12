@@ -54,70 +54,74 @@ source install/setup.bash
 
 ---
 
-## ROS2 사용 (단일 허브)
+## ROS2 사용
+
+**단일 노드가 1개 이상의 허브를 관리**하고, 포트는 **이름**(전역 고유)으로 제어한다. 허브가 1개든 N개든 같은 노드·launch·서비스를 쓴다. 외부 호출자는 허브 위치를 몰라도 포트 이름만으로 제어한다.
+
+### 설정 (`config/exsys_hub_multi.yaml`)
+
+허브 목록을 적는다. 1개면 항목 1개, 여러 개면 여러 항목. `device_path`는 setup.sh가 만든 per-serial 심링크로 채운다.
+
+```yaml
+hubs:
+  - name: hub_bottom
+    device_path: /dev/exsys_hub-BG02Y51S    # setup.sh --list 로 확인한 심링크
+    protected_ports: []
+    inrush_delay_ms: 500
+    port_names: ["handeye_camera", "bottom_camera", "front_camera", ""]   # 빈칸=미사용
+  - name: hub_top
+    device_path: /dev/exsys_hub-BG0317MR
+    port_names: ["switching_hub", "right_camera", "rear_camera", "left_camera"]
+```
+
+> 포트 이름은 **모든 허브에서 전역 고유**해야 한다(중복 시 configure 실패). 빈 이름("")은 제어 대상에서 제외된다.
+
+### 기동
 
 ```bash
 ros2 launch exsys_usb_hub exsys_hub.launch.py
-ros2 launch exsys_usb_hub exsys_hub.launch.py device_path:=/dev/ttyUSB0
+ros2 launch exsys_usb_hub exsys_hub.launch.py config:=/path/to/hubs.yaml
 ```
 
-launch는 Lifecycle 노드를 띄우고 자동으로 configure→activate한다 (`auto_start:=false`로 수동 제어 가능).
+Lifecycle 노드를 띄우고 자동으로 configure→activate한다 (`auto_start:=false`로 수동 제어).
 
-### 서비스
+### 서비스 — 이름으로 제어
 
 ```bash
-# 포트 N 제어 (data: true=ON, false=OFF)
-ros2 service call /exsys_hub_node/port_2/set std_srvs/srv/SetBool "{data: false}"
+# 포트 이름으로 ON/OFF (어느 허브인지 몰라도 됨)
+ros2 service call /exsys_hub_node/set_port exsys_usb_hub_msgs/srv/SetPort \
+  "{port: 'handeye_camera', state: false}"
 
+# 전체 허브 대상 관리 명령
 ros2 service call /exsys_hub_node/reset         std_srvs/srv/Trigger
 ros2 service call /exsys_hub_node/factory_reset std_srvs/srv/Trigger
 ros2 service call /exsys_hub_node/save          std_srvs/srv/Trigger
 ```
 
-보호 포트(`protected_ports`)를 OFF하려 하면 서비스가 `success: false`로 거부한다.
+보호 포트(`protected_ports`)에 매핑된 이름을 OFF하려 하면 `success: false`로 거부한다.
 
-### 토픽
+### 토픽 — 이름 포함 상태
 
 ```bash
-ros2 topic echo /exsys_hub_node/port_states   # std_msgs/Int32MultiArray (0/1, latched)
-ros2 topic echo /diagnostics                  # diagnostic_msgs/DiagnosticArray
+ros2 topic echo /exsys_hub_node/hub_status   # exsys_usb_hub_msgs/HubStatus (이름 포함, latched)
+# ports:
+#   - {hub: hub_top, index: 4, name: left_camera, on: true}
+ros2 topic echo /diagnostics                 # diagnostic_msgs/DiagnosticArray (허브별 진단)
 ```
 
-### 파라미터 (`config/exsys_hub.yaml`)
+### 허브별 파라미터 (config 항목당)
 
-| 파라미터 | 기본값 | 설명 |
+| 키 | 기본값 | 설명 |
 |---|---|---|
-| `device_path` | `/dev/exsys_hub` | 시리얼 포트 (udev 심링크) |
+| `device_path` | — | 시리얼 포트 (udev 심링크) |
 | `baudrate` | `9600` | 장치 고정값 |
 | `poll_rate_hz` | `1.0` | 상태 폴링 주기 |
-| `protected_ports` | `[1]` | OFF 거부 포트 (예: 메인 컴퓨트) |
+| `protected_ports` | `[]` | OFF 거부 포트 번호 |
 | `inrush_delay_ms` | `500` | OFF→ON 사이 최소 대기 |
 | `verify_retries` | `2` | set 후 read-back 검증 재시도 |
-| `port_names` | `[...]` | 진단/표시용 라벨 |
+| `port_names` | `[]` | 포트 이름(전역 고유, 제어 키) |
 
----
-
-## ROS2 사용 (다중 허브)
-
-여러 허브는 허브마다 네임스페이스 노드로 띄운다. `config/exsys_hub_multi.yaml`에 허브 목록을 적고:
-
-```yaml
-hubs:
-  - name: hub_front
-    device_path: /dev/exsys_hub-AB0KXYZ   # setup.sh 출력 심링크로 교체
-    protected_ports: [1]
-    port_names: ["Compute", "Camera", "LiDAR", "Dongle"]
-  - name: hub_rear
-    device_path: /dev/exsys_hub-EF34GH
-    port_names: ["Arm", "Gripper", "Sensor", "Spare"]
-```
-
-```bash
-ros2 launch exsys_usb_hub exsys_hub_multi.launch.py
-# 서비스/토픽이 네임스페이스로 분리됨:
-ros2 service call /hub_front/exsys_hub_node/port_2/set std_srvs/srv/SetBool "{data: false}"
-ros2 topic echo  /hub_rear/exsys_hub_node/port_states
-```
+> `ros2 launch ... exsys_hub_multi.launch.py` 도 동일하게 동작한다(통합 launch의 하위호환 별칭).
 
 ---
 
