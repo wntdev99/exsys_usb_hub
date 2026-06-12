@@ -104,6 +104,34 @@ def test_set_port_unknown_name():
         node.destroy_node()
 
 
+def test_set_port_never_raises_on_unexpected_error():
+    """매니저가 예상 못 한 예외를 던져도 서비스는 success=false 만 반환한다."""
+    class _BoomManager:
+        def connect(self):
+            pass
+
+        def info(self):
+            raise RuntimeError("boom")
+
+        def set_port(self, idx, state):
+            raise RuntimeError("unexpected")
+
+        def status(self):
+            raise RuntimeError("boom")
+
+        def close(self):
+            pass
+
+    node = ExsysHubNode(hubs_factory=lambda: [("hub_x", _BoomManager(), ["cam_x", "", "", ""])])
+    try:
+        node.on_configure(None)
+        r = node._on_set_port(SetPort.Request(port="cam_x", state=True), SetPort.Response())
+        assert r.success is False
+        assert "실패" in r.message
+    finally:
+        node.destroy_node()
+
+
 def test_protected_port_refused_by_name():
     node, hub_a, _ = _two_hub_node(protected_a=[1])  # hub_a 포트1 = cam_a 보호
     try:

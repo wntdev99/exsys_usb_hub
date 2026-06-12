@@ -127,12 +127,12 @@ class ExsysHubNode(Node):
         for hub in self._hubs.values():
             try:
                 hub.manager.connect()
-                hub.connected = True
                 info = hub.manager.info()
+                hub.connected = True
                 self.get_logger().info(
                     f"[{hub.name}] 연결됨: {info.model} ({info.n_ports}포트, fw {info.firmware})"
                 )
-            except HubError as exc:
+            except Exception as exc:  # noqa: BLE001 — 한 허브 실패가 configure 를 막지 않는다
                 hub.connected = False
                 self.get_logger().warn(f"[{hub.name}] 연결 실패(추후 재시도): {exc}")
 
@@ -158,8 +158,8 @@ class ExsysHubNode(Node):
     def on_activate(self, state) -> TransitionCallbackReturn:
         hz = self.get_parameter("poll_rate_hz").value or 1.0
         self._poll_timer = self.create_timer(
-            1.0 / hz, self._publish_all, callback_group=self._cb)
-        self._publish_all()
+            1.0 / hz, self._safe_publish, callback_group=self._cb)
+        self._safe_publish()
         return super().on_activate(state)
 
     def on_deactivate(self, state) -> TransitionCallbackReturn:
@@ -181,31 +181,32 @@ class ExsysHubNode(Node):
     # ------------------------------------------------------------------
 
     def _on_set_port(self, request, response):
-        entry = self._name_index.get(request.port)
-        if entry is None:
-            response.success = False
-            response.message = (
-                f"알 수 없는 포트 이름 '{request.port}'. "
-                f"사용 가능: {sorted(self._name_index)}"
-            )
-            return response
-        hub_name, idx = entry
-        manager = self._hubs[hub_name].manager
+        # 서비스 핸들러는 어떤 입력/오류에도 예외를 던지지 않고 항상 응답을 채운다.
         try:
-            manager.set_port(idx, request.state)
-            response.success = True
-            response.message = (
-                f"{request.port} ({hub_name}:{idx}) -> {'ON' if request.state else 'OFF'}"
-            )
+            entry = self._name_index.get(request.port)
+            if entry is None:
+                response.success = False
+                response.message = (
+                    f"알 수 없는 포트 이름 '{request.port}'. "
+                    f"사용 가능: {sorted(self._name_index)}"
+                )
+            else:
+                hub_name, idx = entry
+                self._hubs[hub_name].manager.set_port(idx, request.state)
+                response.success = True
+                response.message = (
+                    f"{request.port} ({hub_name}:{idx}) -> "
+                    f"{'ON' if request.state else 'OFF'}"
+                )
         except SafetyViolation as exc:
             response.success = False
             response.message = f"안전 정책 거부: {exc}"
             self.get_logger().warn(response.message)
-        except (HubError, ValueError) as exc:
+        except Exception as exc:  # noqa: BLE001 — 서비스는 절대 죽지 않는다
             response.success = False
-            response.message = str(exc)
-            self.get_logger().error(f"{request.port} 설정 실패: {exc}")
-        self._publish_all()
+            response.message = f"설정 실패: {exc}"
+            self.get_logger().error(f"set_port 실패 ('{request.port}'): {exc}")
+        self._safe_publish()
         return response
 
     def _on_reset(self, request, response):
@@ -218,24 +219,31 @@ class ExsysHubNode(Node):
         return self._run_all(response, lambda m: m.save(), "save")
 
     def _run_all(self, response, fn, label: str):
-        """모든 허브에 동작을 수행하고 허브별 결과를 보고한다."""
+        """모든 허브에 동작을 수행하고 허브별 결과를 보고한다. 예외를 던지지 않는다."""
         results = []
         ok = True
         for name, hub in self._hubs.items():
             try:
                 fn(hub.manager)
                 results.append(f"{name}:OK")
-            except (HubError, ValueError) as exc:
+            except Exception as exc:  # noqa: BLE001 — 한 허브 실패가 서비스를 죽이지 않는다
                 ok = False
                 results.append(f"{name}:FAIL({exc})")
         response.success = ok
-        response.message = f"{label} — " + ", ".join(results)
-        self._publish_all()
+        response.message = f"{label} — " + ", ".join(results) if results else f"{label} — (허브 없음)"
+        self._safe_publish()
         return response
 
     # ------------------------------------------------------------------
     # 발행
     # ------------------------------------------------------------------
+
+    def _safe_publish(self) -> None:
+        """상태 발행을 시도하되, 실패가 서비스 콜백을 죽이지 않도록 감싼다."""
+        try:
+            self._publish_all()
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().warn(f"상태 발행 실패: {exc}")
 
     def _publish_all(self) -> None:
         msg = HubStatus()
@@ -245,7 +253,7 @@ class ExsysHubNode(Node):
             try:
                 states = hub.manager.status()
                 hub.connected = True
-            except HubError as exc:
+            except Exception as exc:  # noqa: BLE001 — 한 허브 오류가 다른 허브 발행을 막지 않는다
                 hub.connected = False
                 diag.append(self._diag(name, hub, False, str(exc), None))
                 continue
@@ -275,7 +283,7 @@ class ExsysHubNode(Node):
             st.message = "connected"
             try:
                 st.values.append(KeyValue(key="firmware", value=hub.manager.info().firmware))
-            except HubError:
+            except Exception:  # noqa: BLE001
                 pass
             if states is not None:
                 for idx, on in enumerate(states, start=1):
