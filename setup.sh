@@ -37,6 +37,85 @@ _attr() {
     udevadm info -a -n "$1" 2>/dev/null | grep "ATTRS{$2}" | head -1 | sed 's/.*=="\(.*\)"/\1/'
 }
 
+# serial 정규화: 모두 0이거나 1글자 이하면 빈 값으로 취급
+_clean_serial() {
+    local s="$1"
+    [[ "$s" =~ ^0+$ || ${#s} -le 1 ]] && echo "" || echo "$s"
+}
+
+# 포트에 ?Q 를 보내 모델/포트수/펌웨어 확인 (읽기 전용). 코어는 ROS 무관.
+# 빌드 전에도 동작하도록 src 를 PYTHONPATH 에 넣는다. 실패 시 빈 문자열.
+_probe_model() {  # $1 = port
+    PYTHONPATH="$SCRIPT_DIR/src" python3 - "$1" 2>/dev/null <<'PY' || true
+import sys
+try:
+    from exsys_usb_hub.core import SerialTransport
+    from exsys_usb_hub.core import protocol
+    t = SerialTransport(sys.argv[1], timeout=1, max_retries=0)
+    t.connect()
+    info = protocol.parse_info_response(t.transaction(protocol.CMD_QUERY_INFO))
+    t.close()
+    print(f"{info.model} {info.n_ports}p {info.firmware}")
+except Exception:
+    pass
+PY
+}
+
+usage() {
+    cat <<EOF
+사용법: bash setup.sh [옵션]
+
+옵션 없음   장치 감지 → udev 규칙/심링크 → colcon 빌드 (기본 설치)
+  --list,-l  연결된 USB-Serial 장치만 조회하고 종료 (아무것도 변경 안 함).
+             포트/serial/심링크 매핑과 ?Q 모델 확인으로 "어떤 포트가 어떤 허브인지" 파악.
+  --help,-h  이 도움말
+EOF
+}
+
+# 비파괴 조회 모드: 연결된 장치와 식별 정보를 출력하고 종료
+do_list() {
+    info "USB-Serial 장치 스캔 중... (변경 없음)"
+    local found=0
+    printf "  ${BOLD}%-12s %-9s %-12s %-26s %-16s %s${NC}\n" \
+        PORT VID:PID SERIAL "SYMLINK" MODEL PRODUCT
+    for port in /dev/ttyUSB* /dev/ttyACM*; do
+        [[ -e "$port" ]] || continue
+        local vid pid serial product link model
+        vid=$(_attr "$port" idVendor); pid=$(_attr "$port" idProduct)
+        [[ -n "$vid" && -n "$pid" ]] || continue
+        serial=$(_clean_serial "$(_attr "$port" serial)")
+        product=$(_attr "$port" product)
+        if [[ -n "$serial" ]]; then link="/dev/exsys_hub-$serial"; else link="(serial 없음)"; fi
+        model=$(_probe_model "$port")
+        [[ -z "$model" ]] && model="(미확인)" || true
+        printf "  %-12s %-9s %-12s %-26s %-16s %s\n" \
+            "$port" "$vid:$pid" "${serial:-—}" "$link" "$model" "${product:-—}"
+        found=$((found+1))
+    done
+    [[ $found -eq 0 ]] && warn "USB-Serial 장치를 찾을 수 없습니다." || true
+
+    echo; info "현재 존재하는 심링크:"
+    local any=0
+    for l in /dev/exsys_hub*; do
+        [[ -L "$l" ]] || continue
+        echo "    $l -> $(readlink -f "$l")"; any=1
+    done
+    [[ $any -eq 0 ]] && echo "    (없음 — 아직 setup.sh 미실행)" || true
+
+    echo; echo -e "  ${CYAN}MODEL 이 '(미확인)'${NC} 이면 Exsys 허브가 아니거나 포트를 다른 프로세스가 점유 중입니다."
+    echo -e "  다중 허브는 위 SYMLINK 값을 config/exsys_hub_multi.yaml 의 device_path 에 채우세요."
+}
+
+# ---------------------------------------------------------------------------
+# 인자 처리
+# ---------------------------------------------------------------------------
+case "${1:-}" in
+    --list|-l|list) do_list; exit 0 ;;
+    --help|-h)      usage;   exit 0 ;;
+    "")             ;;  # 기본 설치 모드로 진행
+    *)              error "알 수 없는 옵션: '$1' (도움말: bash setup.sh --help)" ;;
+esac
+
 # ---------------------------------------------------------------------------
 # Step 1: Platform check
 # ---------------------------------------------------------------------------
