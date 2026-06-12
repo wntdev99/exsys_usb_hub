@@ -28,3 +28,10 @@ class ProtocolError(HubError):
 
     I/O 없이 순수 코덱 단계에서만 발생한다 (:mod:`exsys_usb_hub.core.protocol`).
     """
+
+
+class SafetyViolation(HubError):
+    """안전 정책에 의해 요청이 거부된 경우 (예: 보호 포트 차단 시도).
+
+    하드웨어를 보호하기 위한 의도적 거부이며, 통신 오류가 아니다.
+    """

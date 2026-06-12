@@ -124,6 +124,15 @@ class SerialTransport:
     def is_connected(self) -> bool:
         return self._ser is not None and self._ser.is_open
 
+    @property
+    def lock(self):
+        """트랜잭션 직렬화에 쓰이는 reentrant 락.
+
+        매니저가 read-modify-write 를 원자적으로 묶을 때 ``with transport.lock:``
+        로 사용한다. RLock 이라 내부 ``transaction()`` 의 재진입이 안전하다.
+        """
+        return self._lock
+
     def __enter__(self) -> "SerialTransport":
         self.connect()
         return self

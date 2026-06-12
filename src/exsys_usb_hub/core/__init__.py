@@ -9,12 +9,20 @@ from .errors import (
     HubResponseError,
     HubTimeoutError,
     ProtocolError,
+    SafetyViolation,
 )
+from .manager import HubManager
+from .protocol import HubInfo
+from .transport import SerialTransport
 
 __all__ = [
+    "HubManager",
+    "SerialTransport",
+    "HubInfo",
     "HubError",
     "HubConnectionError",
     "HubTimeoutError",
     "HubResponseError",
     "ProtocolError",
+    "SafetyViolation",
 ]
