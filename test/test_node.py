@@ -112,6 +112,34 @@ def test_reset_and_save_triggers():
         node.destroy_node()
 
 
+def test_array_params_accept_overrides():
+    """배열 파라미터가 빈 기본값 + 비어있지 않은 오버라이드를 모두 수용한다.
+
+    회귀: 빈 리스트 기본값이 BYTE_ARRAY 로 추론되어 INTEGER/STRING_ARRAY
+    오버라이드와 충돌하던 InvalidParameterTypeException 방지.
+    """
+    from rclpy.parameter import Parameter
+
+    node = ExsysHubNode(parameter_overrides=[
+        Parameter("protected_ports", value=[1, 3]),
+        Parameter("port_names", value=["A", "B", "C", "D"]),
+    ])
+    try:
+        assert list(node.get_parameter("protected_ports").value) == [1, 3]
+        assert list(node.get_parameter("port_names").value) == ["A", "B", "C", "D"]
+    finally:
+        node.destroy_node()
+
+
+def test_array_params_default_empty():
+    """오버라이드가 없으면 배열 파라미터 기본값은 빈 리스트다."""
+    node = ExsysHubNode()
+    try:
+        assert list(node.get_parameter("protected_ports").value) == []
+    finally:
+        node.destroy_node()
+
+
 def test_activate_starts_polling_timer():
     node, hub = _make_node()
     try:

@@ -29,7 +29,7 @@ import functools
 
 import rclpy
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
-from rcl_interfaces.msg import ParameterDescriptor, ParameterType
+from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.lifecycle import Node, TransitionCallbackReturn
@@ -44,8 +44,10 @@ from ..core import (
     SerialTransport,
 )
 
-_INT_ARRAY = ParameterDescriptor(type=ParameterType.PARAMETER_INTEGER_ARRAY)
-_STR_ARRAY = ParameterDescriptor(type=ParameterType.PARAMETER_STRING_ARRAY)
+# 배열 파라미터는 동적 타이핑으로 선언한다. 빈 리스트 기본값([])은 rclpy 가
+# BYTE_ARRAY 로 추론해 INTEGER/STRING_ARRAY 오버라이드와 충돌하므로,
+# dynamic_typing 으로 타입 고정을 피한다.
+_ARRAY_PARAM = ParameterDescriptor(dynamic_typing=True)
 
 # port_states 는 늦게 구독한 노드도 마지막 값을 받도록 latched.
 _LATCHED_QOS = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
@@ -75,10 +77,10 @@ class ExsysHubNode(Node):
         self.declare_parameter("baudrate", 9600)
         self.declare_parameter("timeout", 2.0)
         self.declare_parameter("poll_rate_hz", 1.0)
-        self.declare_parameter("protected_ports", [], _INT_ARRAY)
+        self.declare_parameter("protected_ports", [], _ARRAY_PARAM)
         self.declare_parameter("inrush_delay_ms", 500)
         self.declare_parameter("verify_retries", 2)
-        self.declare_parameter("port_names", [], _STR_ARRAY)
+        self.declare_parameter("port_names", [], _ARRAY_PARAM)
 
     # ------------------------------------------------------------------
     # Lifecycle 전이

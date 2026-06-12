@@ -43,7 +43,12 @@ def _spawn_hubs(context, *args, **kwargs):
     actions = []
     for hub in data.get("hubs", []):
         name = hub["name"]
-        params = {k: v for k, v in hub.items() if k != "name"}
+        # 빈 리스트([])는 launch_ros 가 빈 튜플로 변환해 거부하므로 제외한다.
+        # 노드의 배열 파라미터 기본값([])이 이를 대신하므로 의미는 동일하다.
+        params = {
+            k: v for k, v in hub.items()
+            if k != "name" and not (isinstance(v, list) and len(v) == 0)
+        }
 
         node = LifecycleNode(
             package="exsys_usb_hub",
