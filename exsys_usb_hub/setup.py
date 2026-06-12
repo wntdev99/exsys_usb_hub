@@ -8,9 +8,8 @@ package_name = "exsys_usb_hub"
 setup(
     name=package_name,
     version="2.0.0",
-    # src-layout: import 패키지는 src/ 밑에 있다.
-    packages=find_packages(where="src"),
-    package_dir={"": "src"},
+    # 표준 ament_python 레이아웃: import 패키지가 setup.py 와 같은 위치에 있다.
+    packages=find_packages(exclude=["test", "test.*"]),
     data_files=[
         ("share/ament_index/resource_index/packages",
             ["resource/" + package_name]),
