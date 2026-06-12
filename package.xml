@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>exsys_usb_hub</name>
+  <version>2.0.0</version>
+  <description>
+    Exsys 관리형 USB 허브(EX-1504HMS 등) 포트 전원 제어 패키지.
+    ROS 비의존 코어(프로토콜·시리얼·안전정책) 위에 ROS2 Lifecycle 노드를 얹은 구조로,
+    노트북/CLI/테스트에서 독립 동작하고 로봇에서는 노드로 통합된다.
+  </description>
+  <maintainer email="jeongmin.choi@wattrobotics.ai">jeongmin.choi</maintainer>
+  <license>Apache-2.0</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>diagnostic_msgs</exec_depend>
+  <exec_depend>lifecycle_msgs</exec_depend>
+  <exec_depend>rcl_interfaces</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>python3-serial</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
