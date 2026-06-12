@@ -1,6 +1,6 @@
 #!/bin/bash
-# Exsys USB Hub — setup script
-# Installs dependencies, configures udev rules, and creates a default config.
+# Exsys USB Hub — setup 스크립트 (ROS2 ament_python 패키지)
+# udev 규칙/심링크를 설정하고 colcon 으로 패키지를 빌드한다.
 
 set -e
 
@@ -14,10 +14,11 @@ NC='\033[0m'
 UDEV_RULE_FILE="/etc/udev/rules.d/99-exsys-hub.rules"
 SYMLINK_NAME="exsys_hub"
 SYMLINK_PATH="/dev/${SYMLINK_NAME}"
-CONFIG_FILE="exsys_hub.yaml"
+PKG_NAME="exsys_usb_hub"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# 패키지는 <workspace>/src/<pkg> 에 위치 → 워크스페이스 루트는 두 단계 위.
+WS_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-# sudo로 실행 시 실제 사용자 추적 (pip 설치 경로 등에 활용)
 REAL_USER="${SUDO_USER:-$USER}"
 
 # ---------------------------------------------------------------------------
@@ -44,9 +45,9 @@ require_sudo() {
 info "플랫폼 확인 중..."
 [[ "$(uname -s)" == "Linux" ]] || error "이 스크립트는 Linux 전용입니다."
 
-# WSL 환경 감지
+# WSL 환경 감지 (udev 미동작)
 if grep -qiE "microsoft|wsl" /proc/version 2>/dev/null; then
-    error "WSL 환경은 지원하지 않습니다.\nudev가 WSL에서 동작하지 않으므로 네이티브 Linux 또는 VM을 사용하세요."
+    error "WSL 환경은 지원하지 않습니다.\nudev 가 동작하지 않으므로 네이티브 Linux 또는 VM 을 사용하세요."
 fi
 
 # Docker/컨테이너 환경 감지
@@ -54,68 +55,47 @@ if [[ -f /.dockerenv ]] || grep -q "docker\|lxc" /proc/1/cgroup 2>/dev/null; the
     warn "컨테이너 환경이 감지되었습니다. udev 규칙이 정상 동작하지 않을 수 있습니다."
 fi
 
-# Ubuntu 버전 확인 (22.04 이상 필요 — Python 3.10+ 기본 탑재)
-if command -v lsb_release &>/dev/null; then
-    distro=$(lsb_release -is)
-    version=$(lsb_release -rs)
-    if [[ "$distro" == "Ubuntu" ]]; then
-        major=$(echo "$version" | cut -d. -f1)
-        minor=$(echo "$version" | cut -d. -f2)
-        if [[ "$major" -lt 22 ]] || [[ "$major" -eq 22 && "$minor" -lt 4 ]]; then
-            error "Ubuntu 22.04 이상이 필요합니다. (현재: Ubuntu $version)"
-        fi
-        ok "Ubuntu $version 확인"
-    else
-        ok "Linux ($distro $version) 확인 — Python 3.10+ 여부만 검증합니다."
-    fi
-else
-    ok "Linux 확인"
-fi
-
-# Python 버전 확인 (3.10 이상 필요)
-if ! command -v python3 &>/dev/null; then
-    error "python3 를 찾을 수 없습니다."
-fi
+# Python 버전 확인 (3.10 이상)
+command -v python3 &>/dev/null || error "python3 를 찾을 수 없습니다."
 py_version=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-py_major=$(echo "$py_version" | cut -d. -f1)
-py_minor=$(echo "$py_version" | cut -d. -f2)
+py_major=${py_version%.*}; py_minor=${py_version#*.}
 if [[ "$py_major" -lt 3 ]] || [[ "$py_major" -eq 3 && "$py_minor" -lt 10 ]]; then
     error "Python 3.10 이상이 필요합니다. (현재: Python $py_version)"
 fi
 ok "Python $py_version 확인"
 
-# udevadm 설치 여부 확인
+# udevadm 설치 여부
 if ! command -v udevadm &>/dev/null; then
-    warn "udevadm 을 찾을 수 없습니다. udev 규칙 및 심링크 설정을 건너뜁니다."
-    warn "설치: sudo apt install udev"
+    warn "udevadm 을 찾을 수 없습니다. udev 규칙/심링크 설정을 건너뜁니다 (설치: sudo apt install udev)."
     SKIP_UDEV=1
 fi
 
 # ---------------------------------------------------------------------------
-# Step 2: Python dependencies
+# Step 2: ROS2 환경 확인
 # ---------------------------------------------------------------------------
 
-info "Python 패키지 설치 중..."
+info "ROS2 환경 확인 중..."
 
-# pip 명령어 결정 (pip3 우선, 없으면 pip)
-if command -v pip3 &>/dev/null; then
-    PIP=pip3
-elif command -v pip &>/dev/null; then
-    PIP=pip
-else
-    error "pip 를 찾을 수 없습니다. Python 3 환경을 확인하세요."
+# ROS_DISTRO 가 비어 있으면 /opt/ros 에서 가장 최신 배포판을 자동 선택.
+if [[ -z "$ROS_DISTRO" ]]; then
+    if compgen -G "/opt/ros/*/setup.bash" > /dev/null; then
+        ROS_DISTRO="$(basename "$(ls -d /opt/ros/*/ | sort | tail -1)")"
+        warn "ROS_DISTRO 가 설정되지 않아 '$ROS_DISTRO' 를 사용합니다."
+    fi
 fi
 
-# pyserial, pyyaml 은 시스템(apt/ROS2)에 이미 설치된 버전을 그대로 사용.
-# --no-deps: 의존성 재설치 생략 → 시스템 패키지 충돌 없음
-# --break-system-packages: exsys_hub 모듈 등록만을 위한 최소 사용
-$PIP install --quiet -e "$SCRIPT_DIR" --no-deps --break-system-packages 2>/dev/null \
-    || $PIP install --quiet -e "$SCRIPT_DIR" --no-deps
-ok "exsys-hub (editable) 설치 완료 — 어디서든 import 가능"
+if [[ -n "$ROS_DISTRO" && -f "/opt/ros/$ROS_DISTRO/setup.bash" ]]; then
+    # shellcheck disable=SC1090
+    source "/opt/ros/$ROS_DISTRO/setup.bash"
+    ok "ROS2 $ROS_DISTRO 확인"
+else
+    warn "ROS2 설치를 찾지 못했습니다. colcon 빌드를 건너뜁니다."
+    SKIP_BUILD=1
+fi
 
-# pyserial, pyyaml 이 실제로 import 가능한지 확인
+# pyserial, pyyaml import 확인 (rosdep/apt 로 설치되는 시스템 패키지)
 python3 -c "import serial, yaml" 2>/dev/null \
-    || warn "pyserial 또는 pyyaml 이 없습니다. 수동으로 설치하세요: sudo apt install python3-serial python3-yaml"
+    || warn "pyserial/pyyaml 이 없습니다. 설치: sudo apt install python3-serial python3-yaml"
 
 # ---------------------------------------------------------------------------
 # Step 3: Detect connected device
@@ -123,82 +103,48 @@ python3 -c "import serial, yaml" 2>/dev/null \
 
 info "연결된 USB-Serial 장치 감지 중..."
 
-DETECTED_PORT=""
-DETECTED_VID=""
-DETECTED_PID=""
-DETECTED_SERIAL=""
-DETECTED_PRODUCT=""
+DETECTED_PORT=""; DETECTED_VID=""; DETECTED_PID=""; DETECTED_SERIAL=""; DETECTED_PRODUCT=""
 DEVICE_COUNT=0
-
 declare -a FOUND_PORTS=()
 
 for port in /dev/ttyUSB* /dev/ttyACM*; do
     [[ -e "$port" ]] || continue
-
-    vid=$(udevadm info -a -n "$port" 2>/dev/null \
-        | grep 'ATTRS{idVendor}' | head -1 | sed 's/.*=="\(.*\)"/\1/')
-    pid=$(udevadm info -a -n "$port" 2>/dev/null \
-        | grep 'ATTRS{idProduct}' | head -1 | sed 's/.*=="\(.*\)"/\1/')
-
+    vid=$(udevadm info -a -n "$port" 2>/dev/null | grep 'ATTRS{idVendor}' | head -1 | sed 's/.*=="\(.*\)"/\1/')
+    pid=$(udevadm info -a -n "$port" 2>/dev/null | grep 'ATTRS{idProduct}' | head -1 | sed 's/.*=="\(.*\)"/\1/')
     if [[ -n "$vid" && -n "$pid" ]]; then
-        FOUND_PORTS+=("$port")
-        DEVICE_COUNT=$((DEVICE_COUNT + 1))
+        FOUND_PORTS+=("$port"); DEVICE_COUNT=$((DEVICE_COUNT + 1))
     fi
 done
 
+_read_attrs() {  # $1 = port
+    DETECTED_PORT="$1"
+    DETECTED_VID=$(udevadm info -a -n "$1" 2>/dev/null | grep 'ATTRS{idVendor}' | head -1 | sed 's/.*=="\(.*\)"/\1/')
+    DETECTED_PID=$(udevadm info -a -n "$1" 2>/dev/null | grep 'ATTRS{idProduct}' | head -1 | sed 's/.*=="\(.*\)"/\1/')
+    local serial product
+    serial=$(udevadm info -a -n "$1" 2>/dev/null | grep 'ATTRS{serial}' | head -1 | sed 's/.*=="\(.*\)"/\1/')
+    product=$(udevadm info -a -n "$1" 2>/dev/null | grep 'ATTRS{product}' | head -1 | sed 's/.*=="\(.*\)"/\1/')
+    [[ "$serial" =~ ^0+$ || ${#serial} -le 1 ]] && serial=""
+    DETECTED_SERIAL="$serial"; DETECTED_PRODUCT="$product"
+}
+
 if [[ $DEVICE_COUNT -eq 0 ]]; then
-    warn "연결된 USB-Serial 장치를 찾을 수 없습니다."
-    warn "장치 연결 후 setup.sh 를 다시 실행하세요."
+    warn "연결된 USB-Serial 장치를 찾을 수 없습니다. 장치 연결 후 다시 실행하세요."
 elif [[ $DEVICE_COUNT -gt 1 ]]; then
-    # 여러 장치 발견 — 목록 출력 후 선택 요청
-    warn "USB-Serial 장치가 ${DEVICE_COUNT}개 감지되었습니다. Exsys 허브에 해당하는 포트를 선택하세요."
+    warn "USB-Serial 장치가 ${DEVICE_COUNT}개 감지되었습니다. Exsys 허브 포트를 선택하세요."
     for i in "${!FOUND_PORTS[@]}"; do
         port="${FOUND_PORTS[$i]}"
-        product=$(udevadm info -a -n "$port" 2>/dev/null \
-            | grep 'ATTRS{product}' | head -1 | sed 's/.*=="\(.*\)"/\1/')
+        product=$(udevadm info -a -n "$port" 2>/dev/null | grep 'ATTRS{product}' | head -1 | sed 's/.*=="\(.*\)"/\1/')
         echo "  [$((i+1))] $port  ${product:-(product unknown)}"
     done
-    echo -n "  선택 [1-${DEVICE_COUNT}]: "
-    read -r choice
+    echo -n "  선택 [1-${DEVICE_COUNT}]: "; read -r choice
     if [[ "$choice" -ge 1 && "$choice" -le "$DEVICE_COUNT" ]] 2>/dev/null; then
-        TARGET_PORT="${FOUND_PORTS[$((choice-1))]}"
+        _read_attrs "${FOUND_PORTS[$((choice-1))]}"
     else
         error "잘못된 선택입니다."
     fi
-
-    vid=$(udevadm info -a -n "$TARGET_PORT" 2>/dev/null \
-        | grep 'ATTRS{idVendor}' | head -1 | sed 's/.*=="\(.*\)"/\1/')
-    pid=$(udevadm info -a -n "$TARGET_PORT" 2>/dev/null \
-        | grep 'ATTRS{idProduct}' | head -1 | sed 's/.*=="\(.*\)"/\1/')
-    serial=$(udevadm info -a -n "$TARGET_PORT" 2>/dev/null \
-        | grep 'ATTRS{serial}' | head -1 | sed 's/.*=="\(.*\)"/\1/')
-    product=$(udevadm info -a -n "$TARGET_PORT" 2>/dev/null \
-        | grep 'ATTRS{product}' | head -1 | sed 's/.*=="\(.*\)"/\1/')
-    [[ "$serial" =~ ^0+$ || ${#serial} -le 1 ]] && serial=""
-
-    DETECTED_PORT="$TARGET_PORT"
-    DETECTED_VID="$vid"
-    DETECTED_PID="$pid"
-    DETECTED_SERIAL="$serial"
-    DETECTED_PRODUCT="$product"
     ok "선택된 장치: $DETECTED_PORT"
 else
-    port="${FOUND_PORTS[0]}"
-    vid=$(udevadm info -a -n "$port" 2>/dev/null \
-        | grep 'ATTRS{idVendor}' | head -1 | sed 's/.*=="\(.*\)"/\1/')
-    pid=$(udevadm info -a -n "$port" 2>/dev/null \
-        | grep 'ATTRS{idProduct}' | head -1 | sed 's/.*=="\(.*\)"/\1/')
-    serial=$(udevadm info -a -n "$port" 2>/dev/null \
-        | grep 'ATTRS{serial}' | head -1 | sed 's/.*=="\(.*\)"/\1/')
-    product=$(udevadm info -a -n "$port" 2>/dev/null \
-        | grep 'ATTRS{product}' | head -1 | sed 's/.*=="\(.*\)"/\1/')
-    [[ "$serial" =~ ^0+$ || ${#serial} -le 1 ]] && serial=""
-
-    DETECTED_PORT="$port"
-    DETECTED_VID="$vid"
-    DETECTED_PID="$pid"
-    DETECTED_SERIAL="$serial"
-    DETECTED_PRODUCT="$product"
+    _read_attrs "${FOUND_PORTS[0]}"
     ok "장치 감지됨: $DETECTED_PORT"
 fi
 
@@ -210,12 +156,11 @@ if [[ -n "$DETECTED_PORT" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Step 4: udev rule (MODE=0666 — 그룹 설정 없이 누구나 접근 가능)
+# Step 4: udev rule (MODE=0666, /dev/exsys_hub 고정 심링크)
 # ---------------------------------------------------------------------------
 
 if [[ -n "$DETECTED_VID" && -n "$DETECTED_PID" && -z "$SKIP_UDEV" ]]; then
     info "udev 규칙 생성 중: $UDEV_RULE_FILE"
-
     if [[ -n "$DETECTED_SERIAL" ]]; then
         RULE='SUBSYSTEM=="tty", ATTRS{idVendor}=="'"$DETECTED_VID"'", ATTRS{idProduct}=="'"$DETECTED_PID"'", ATTRS{serial}=="'"$DETECTED_SERIAL"'", SYMLINK+="'"$SYMLINK_NAME"'", MODE="0666"'
         MATCH_DESC="VID:PID:Serial (장치 고유)"
@@ -223,15 +168,11 @@ if [[ -n "$DETECTED_VID" && -n "$DETECTED_PID" && -z "$SKIP_UDEV" ]]; then
         RULE='SUBSYSTEM=="tty", ATTRS{idVendor}=="'"$DETECTED_VID"'", ATTRS{idProduct}=="'"$DETECTED_PID"'", SYMLINK+="'"$SYMLINK_NAME"'", MODE="0666"'
         MATCH_DESC="VID:PID"
     fi
-
-    if [[ -f "$UDEV_RULE_FILE" ]]; then
-        warn "$UDEV_RULE_FILE 이미 존재합니다. 덮어씁니다."
-    fi
+    [[ -f "$UDEV_RULE_FILE" ]] && warn "$UDEV_RULE_FILE 이미 존재합니다. 덮어씁니다."
 
     require_sudo
     echo "$RULE" | sudo tee "$UDEV_RULE_FILE" > /dev/null
     ok "udev 규칙 작성 완료 (매칭: $MATCH_DESC, MODE=0666)"
-
     sudo udevadm control --reload-rules
     sudo udevadm trigger
     ok "udev 규칙 적용 완료"
@@ -240,38 +181,24 @@ if [[ -n "$DETECTED_VID" && -n "$DETECTED_PID" && -z "$SKIP_UDEV" ]]; then
     if [[ -L "$SYMLINK_PATH" ]]; then
         ok "심링크 확인: $SYMLINK_PATH -> $(readlink -f "$SYMLINK_PATH")"
     else
-        warn "$SYMLINK_PATH 심링크가 아직 생성되지 않았습니다."
-        warn "장치를 USB 포트에서 뽑았다가 다시 꽂으면 적용됩니다."
+        warn "$SYMLINK_PATH 심링크가 아직 없습니다. 장치를 다시 꽂으면 적용됩니다."
     fi
 fi
 
 # ---------------------------------------------------------------------------
-# Step 5: Default config
+# Step 5: colcon build
 # ---------------------------------------------------------------------------
 
-info "설정 파일 확인 중: $SCRIPT_DIR/$CONFIG_FILE"
-
-if [[ -f "$SCRIPT_DIR/$CONFIG_FILE" ]]; then
-    ok "설정 파일 이미 존재함 — 건너뜀"
-else
-    if [[ -L "$SYMLINK_PATH" || -n "$DETECTED_VID" ]]; then
-        DEFAULT_PORT="$SYMLINK_PATH"
-    elif [[ -n "$DETECTED_PORT" ]]; then
-        DEFAULT_PORT="$DETECTED_PORT"
+if [[ -z "$SKIP_BUILD" ]]; then
+    if ! command -v colcon &>/dev/null; then
+        warn "colcon 미설치 — 빌드를 건너뜁니다. 설치: sudo apt install python3-colcon-common-extensions"
+    elif [[ ! -d "$WS_ROOT/src" ]]; then
+        warn "colcon 워크스페이스 루트를 찾지 못했습니다 ($WS_ROOT). 수동으로 빌드하세요."
     else
-        DEFAULT_PORT="/dev/ttyUSB0"
+        info "colcon 빌드 중: $WS_ROOT (패키지: $PKG_NAME)"
+        ( cd "$WS_ROOT" && colcon build --packages-select "$PKG_NAME" )
+        ok "빌드 완료 — 사용 전: source $WS_ROOT/install/setup.bash"
     fi
-
-    python3 - <<PYEOF
-import sys
-sys.path.insert(0, "$SCRIPT_DIR")
-from exsys_hub import HubConfig
-cfg = HubConfig.default()
-cfg.serial_port = "$DEFAULT_PORT"
-cfg.save("$SCRIPT_DIR/$CONFIG_FILE")
-print(f"    포트: $DEFAULT_PORT")
-PYEOF
-    ok "설정 파일 생성 완료: $SCRIPT_DIR/$CONFIG_FILE"
 fi
 
 # ---------------------------------------------------------------------------
@@ -284,14 +211,17 @@ echo -e "${GREEN}${BOLD}  Setup 완료${NC}"
 echo -e "${BOLD}=============================${NC}"
 echo ""
 echo -e "  실행 사용자 : $REAL_USER"
-echo -e "  의존성      : pyserial, pyyaml"
-[[ -n "$DETECTED_VID" && -z "$SKIP_UDEV" ]] && \
-echo -e "  udev 규칙   : $UDEV_RULE_FILE"
-[[ -L "$SYMLINK_PATH" ]] && \
-echo -e "  심링크      : $SYMLINK_PATH"
-echo -e "  설정 파일   : $SCRIPT_DIR/$CONFIG_FILE"
+[[ -n "$ROS_DISTRO" ]] && echo -e "  ROS2        : $ROS_DISTRO"
+[[ -n "$DETECTED_VID" && -z "$SKIP_UDEV" ]] && echo -e "  udev 규칙   : $UDEV_RULE_FILE"
+[[ -L "$SYMLINK_PATH" ]] && echo -e "  심링크      : $SYMLINK_PATH"
 echo ""
-echo -e "  ${CYAN}사용법:${NC}"
-echo -e "    python3 exsys_cli.py status"
-echo -e "    python3 exsys_cli.py on 1"
+echo -e "  ${CYAN}ROS2 사용법:${NC}"
+echo -e "    source $WS_ROOT/install/setup.bash"
+echo -e "    ros2 launch $PKG_NAME exsys_hub.launch.py"
+echo -e "    ros2 service call /exsys_hub_node/port_2/set std_srvs/srv/SetBool \"{data: false}\""
+echo -e "    ros2 topic echo /exsys_hub_node/port_states"
+echo ""
+echo -e "  ${CYAN}ROS 없이 (CLI):${NC}"
+echo -e "    ros2 run $PKG_NAME exsys_cli status      # 또는 install/.../exsys_cli"
+echo -e "    ros2 run $PKG_NAME exsys_cli on 1"
 echo ""
