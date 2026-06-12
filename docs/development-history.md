@@ -126,14 +126,58 @@ udev 심링크(`/dev/exsys_hub`)를 사용하면 USB 포트를 다른 슬롯에 
 
 ---
 
+> **참고:** 위 4~5단계에서 만든 v1 standalone 모듈(`exsys_hub/`, `exsys_cli.py`)은
+> 이후 6단계에서 로봇 통합용 ROS2 패키지로 전면 리팩토링되어 대체됐다. v1 코드는
+> git 히스토리에 보존돼 있다.
+
+---
+
+## 6단계 — 로봇 통합 리팩토링 (ROS2 패키지)
+
+v1 standalone 은 단발 제어엔 충분했으나, 자율 시스템에 상주하기엔 구조적 결함이 있었다:
+스레드 안전성·재연결·재시도·결과 검증·안전정책·ROS 통합이 모두 없었고, 가장 위험한
+비트 트위들링 코드에 테스트가 0개였다.
+
+이를 **ROS 비의존 코어 + 그 위의 ROS2 노드** 계층 구조로 재설계했다. 코어는 rclpy 를
+전혀 모르므로 노트북·CLI·테스트에서 독립 동작하고, 로봇에서는 노드가 같은 코어를 구동한다.
+
+| 단계 | 작업 | 핵심 |
+|---|---|---|
+| 1 | `core/protocol.py` | 비트 로직을 순수 함수로 추출, 원본 출력을 **골든 벡터**로 동결 + 라운드트립 전수 |
+| 2 | `core/transport.py` | 시리얼 Lock·자동재연결·지수 백오프 재시도 (전원 토글 중 USB 흔들림 대응) |
+| 3 | `core/manager.py` | set 후 read-back 검증, 안전정책(보호포트·인러시지연), RMW 원자성 |
+| 4 | `cli.py` | 코어 위 얇은 CLI (ROS 불필요) |
+| 5 | `ros/node.py` | Lifecycle 노드: 서비스·토픽·진단 |
+| 6 | 패키징 | ament_python (`colcon build`), src-layout |
+
+### 다중 허브 대응
+
+관리 인터페이스가 범용 FTDI FT232R(`0403:6001`)이라 VID:PID 로는 허브를 구분할 수 없고,
+유일한 식별자는 FT232R 의 **serial** 이다. 이에 맞춰 `setup.sh` 는 허브마다
+`/dev/exsys_hub-<serial>` 고정 심링크를 만들고(다른 FTDI 장치 오인식도 방지),
+`exsys_hub_multi.launch.py` 는 허브마다 네임스페이스 노드를 띄운다. 코어의 `HubManager`
+는 트랜스포트별 독립 인스턴스라 다중 허브를 자연히 지원한다.
+
+---
+
 ## 결과
 
-```python
-from exsys_hub import ExsysUsbHub
+ROS 없이 (라이브러리/CLI):
 
-with ExsysUsbHub("/dev/exsys_hub") as hub:
-    hub.off(2)   # 카메라 전원 차단
-    hub.on(2)    # 카메라 전원 복구
+```python
+from exsys_usb_hub.core import HubManager, SerialTransport
+
+with HubManager(SerialTransport("/dev/exsys_hub"), protected_ports=[1]) as hub:
+    hub.off(2)        # 카메라 전원 차단 (보호 포트면 SafetyViolation)
+    hub.power_cycle(2)  # OFF → 인러시 지연 → ON
 ```
 
-로봇 프로세스가 스스로 판단해 특정 USB 장치의 전원을 껐다 켤 수 있는 구조가 완성됐다.
+ROS2 노드로 (로봇 통합):
+
+```bash
+ros2 launch exsys_usb_hub exsys_hub.launch.py
+ros2 service call /exsys_hub_node/port_2/set std_srvs/srv/SetBool "{data: false}"
+```
+
+로봇 프로세스가 스스로 판단해 특정 USB 장치의 전원을, 안전 정책과 결과 검증을 거쳐
+껐다 켤 수 있는 구조가 완성됐다.
