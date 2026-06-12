@@ -4,20 +4,20 @@
 # 가리킨다. setup.sh 실행 결과에 출력된 심링크 경로로 교체할 것.
 # name 은 ROS 네임스페이스가 된다: 서비스/토픽이 /<name>/exsys_hub_node/... 로 노출.
 hubs:
-  - name: hub_front
-    device_path: /dev/exsys_hub-CHANGEME1   # ← setup.sh 가 출력한 serial 심링크
-    baudrate: 9600
-    poll_rate_hz: 1.0
-    protected_ports: [1]
-    inrush_delay_ms: 500
-    verify_retries: 2
-    port_names: ["Compute", "Camera", "LiDAR", "Dongle"]
-
-  - name: hub_rear
-    device_path: /dev/exsys_hub-CHANGEME2
+  - name: hub_bottom
+    device_path: /dev/exsys_hub-BG02Y51S   # ← setup.sh 가 출력한 serial 심링크
     baudrate: 9600
     poll_rate_hz: 1.0
     protected_ports: []
     inrush_delay_ms: 500
     verify_retries: 2
-    port_names: ["Arm", "Gripper", "Sensor", "Spare"]
+    port_names: ["handeye_view_camera", "bottom_view_middle_camera", "front_view_middle_camera", "not_connect"]
+
+  - name: hub_top
+    device_path: /dev/exsys_hub-BG0317MR
+    baudrate: 9600
+    poll_rate_hz: 1.0
+    protected_ports: []
+    inrush_delay_ms: 500
+    verify_retries: 2
+    port_names: ["switching_hub", "bottom_view_right_camera", "bottom_view_rear_camera", "bottom_view_left_camera"]
