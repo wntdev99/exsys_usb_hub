@@ -11,6 +11,7 @@ from .errors import (
     ProtocolError,
     SafetyViolation,
 )
+from .config import HubConfig
 from .manager import HubManager
 from .protocol import HubInfo
 from .transport import SerialTransport
@@ -18,6 +19,7 @@ from .transport import SerialTransport
 __all__ = [
     "HubManager",
     "SerialTransport",
+    "HubConfig",
     "HubInfo",
     "HubError",
     "HubConnectionError",
