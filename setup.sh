@@ -106,12 +106,19 @@ else
     error "pip 를 찾을 수 없습니다. Python 3 환경을 확인하세요."
 fi
 
-# pyserial, pyyaml 은 시스템(apt/ROS2)에 이미 설치된 버전을 그대로 사용.
-# --no-deps: 의존성 재설치 생략 → 시스템 패키지 충돌 없음
-# --break-system-packages: exsys_hub 모듈 등록만을 위한 최소 사용
-$PIP install --quiet -e "$SCRIPT_DIR" --no-deps --break-system-packages 2>/dev/null \
-    || $PIP install --quiet -e "$SCRIPT_DIR" --no-deps
-ok "exsys-hub (editable) 설치 완료 — 어디서든 import 가능"
+# exsys_hub 를 editable 로 등록하면 레포 밖에서도 import 가능해진다.
+# 단 best-effort: setuptools<64(Ubuntu 22.04 기본 59.6 → PEP 660 미지원) 또는
+# 권한/유저사이트 제한 환경에서는 실패할 수 있다. 문서상 사용법은 레포 안에서
+# 'python3 exsys_cli.py' 실행이고, 그 경우 레포 루트가 sys.path 에 오르므로
+# 설치 실패는 치명적이지 않다 → 경고만 남기고 진행한다.
+# pyserial, pyyaml 은 시스템(apt/ROS2) 버전을 그대로 사용하므로 --no-deps.
+if $PIP install --quiet -e "$SCRIPT_DIR" --no-deps --break-system-packages >/dev/null 2>&1 \
+   || $PIP install --quiet -e "$SCRIPT_DIR" --no-deps >/dev/null 2>&1; then
+    ok "exsys-hub (editable) 설치 완료 — 어디서든 import 가능"
+else
+    warn "editable 설치를 건너뜁니다 (setuptools<64 또는 권한 제한)."
+    warn "레포 디렉터리에서 'python3 exsys_cli.py ...' 로 실행하면 정상 동작합니다."
+fi
 
 # pyserial, pyyaml 이 실제로 import 가능한지 확인
 python3 -c "import serial, yaml" 2>/dev/null \
